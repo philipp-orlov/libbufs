@@ -28,6 +28,12 @@ add_library(bufs::bufs ALIAS bufs)
 target_include_directories(bufs INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(bufs INTERFACE cxx_std_17)
 
+# bufs/shm.hpp calls shm_open/shm_unlink, which require -lrt on glibc < 2.34.
+find_library(BUFS_RT_LIBRARY rt)
+if(BUFS_RT_LIBRARY)
+    target_link_libraries(bufs INTERFACE ${BUFS_RT_LIBRARY})
+endif()
+
 # The schema compiler.
 add_executable(bufsc bufsc/main.cpp bufsc/parser.cpp bufsc/generate_cpp.cpp bufsc/check.cpp)
 target_compile_options(bufsc PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>)
