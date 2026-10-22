@@ -1,0 +1,105 @@
+// The benchmark messages, for comparing libbufs with FlatBuffers. Written in
+// the subset both bufsc and flatc accept: the benchmark compiles this one
+// file with each.
+
+namespace bench;
+
+enum Encoding : ubyte { Raw = 0, Compressed = 1, Packed = 2 }
+
+enum Verdict : ubyte { Accept = 0, Partial = 1, Reject = 2 }
+
+// A request: a payload in a named shared-memory block plus the parameters
+// for processing it.
+table Query {
+    query_id:ulong;
+    source:string;
+    width:int;
+    height:int;
+    stride:int;
+    exact:bool;
+    threshold:float;
+    min_score:float;
+    encoding:Encoding;
+    slot:uint;
+    timestamp_us:long;
+    client_id:uint;
+    flags:uint;
+}
+
+struct Box {
+    x:float;
+    y:float;
+    w:float;
+    h:float;
+}
+
+// One result of a report: three strings, a dozen scalars, small vectors, a
+// 128-float feature vector and an optional blob.
+table Item {
+    label:string;
+    category:string;
+    subcategory:string;
+    score:float;
+    category_score:float;
+    subcategory_score:float;
+    item_score:float;
+    exact_score:float;
+    log_prob:float;
+    gapped:bool;
+    provided:bool;
+    verdict:Verdict;
+    rows:int;
+    flags:uint;
+    split_at:int;
+    part_scores:[float];
+    part_boxes:[Box];
+    part_rows:[ubyte];
+    features:[float];
+    bounds:Box;
+    blob:[ubyte];
+}
+
+table Report {
+    query_id:ulong;
+    width:int;
+    height:int;
+    prepare_time:float;
+    process_time:float;
+    items:[Item];
+}
+
+// Fixed-size, struct-only: the SBE-style hot path. libbufs sends it as a
+// struct root; FlatBuffers (whose root must be a table) as a table holding
+// the one struct.
+struct FrameReady {
+    query_id:ulong;
+    timestamp_us:long;
+    slot:uint;
+    width:int;
+    height:int;
+    stride:int;
+    client_id:uint;
+    encoding:Encoding;
+    exact:bool;
+    threshold:float;
+    min_score:float;
+}
+
+table FrameReadyMessage {
+    frame:FrameReady;
+}
+
+// A detector reply as one vector of structs.
+struct Detection {
+    x1:float;
+    y1:float;
+    x2:float;
+    y2:float;
+    score:float;
+    class_id:int;
+}
+
+table DetectionList {
+    query_id:ulong;
+    detections:[Detection];
+}

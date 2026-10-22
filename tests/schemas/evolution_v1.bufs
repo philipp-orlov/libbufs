@@ -1,0 +1,14 @@
+// The first version of a schema; evolution_v2.bufs is the next one.
+
+namespace test.evolution;
+
+enum Kind : ubyte { A, B }
+
+table Person {
+    name:string;
+    age:ushort = 30;
+    kind:Kind;
+    tags:[string];
+}
+
+root_type Person;

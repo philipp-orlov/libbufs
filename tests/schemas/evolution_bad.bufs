@@ -1,0 +1,15 @@
+// Not compatible with evolution_v1.bufs: age changed type, and a default
+// changed. bufsc --check must reject it.
+
+namespace test.evolution;
+
+enum Kind : ubyte { A, B }
+
+table Person {
+    name:string;
+    age:uint = 30;
+    kind:Kind = B;
+    tags:[string];
+}
+
+root_type Person;
