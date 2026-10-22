@@ -29,9 +29,11 @@ target_include_directories(bufs INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOUR
 target_compile_features(bufs INTERFACE cxx_std_17)
 
 # bufs/shm.hpp calls shm_open/shm_unlink, which require -lrt on glibc < 2.34.
-find_library(BUFS_RT_LIBRARY rt)
-if(BUFS_RT_LIBRARY)
-    target_link_libraries(bufs INTERFACE ${BUFS_RT_LIBRARY})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(BUFS_RT_LIBRARY rt)
+    if(BUFS_RT_LIBRARY)
+        target_link_libraries(bufs INTERFACE ${BUFS_RT_LIBRARY})
+    endif()
 endif()
 
 # The schema compiler.

@@ -80,6 +80,15 @@ inline void futexWake(std::atomic<uint32_t>* word) {
     ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
 }
 
+// now() + timeout, clamped to the clock's maximum so a huge timeout cannot
+// overflow into the past.
+inline std::chrono::steady_clock::time_point deadlineAfter(std::chrono::nanoseconds timeout) {
+    const auto now = std::chrono::steady_clock::now();
+    if (timeout > std::chrono::steady_clock::time_point::max() - now)
+        return std::chrono::steady_clock::time_point::max();
+    return now + timeout;
+}
+
 inline void cpuRelax() {
 #if defined(__x86_64__) || defined(__i386__)
     __builtin_ia32_pause();
@@ -114,7 +123,7 @@ bool spinFor(std::chrono::nanoseconds spin, Ready ready) {
 // open, so it can be passed on with bufs::local::Socket.
 class Memory {
 public:
-    // The seals every Memory carries; adopt() requires them.
+    // The seals every Memory carries. adopt() requires SHRINK and GROW.
     static constexpr int kSeals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL;
 
     Memory() = default;
@@ -407,6 +416,7 @@ public:
             writeHeader(index, static_cast<uint32_t>(tail - 8), kPadding);
         reservedPos_ = pos + skip;
         reservedBytes_ = bytes;
+        reserved_ = true;
         return data_ + (reservedPos_ & (capacity_ - 1)) + 8;
     }
 
@@ -414,7 +424,7 @@ public:
     // polling for up to `spin` first, then sleeping on the futex.
     uint8_t* reserve(size_t bytes, std::chrono::nanoseconds timeout,
                      std::chrono::nanoseconds spin = std::chrono::nanoseconds(0)) {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = detail::deadlineAfter(timeout);
         uint8_t* spun = nullptr;
         if (detail::spinFor(spin, [&] { return (spun = reserve(bytes)) != nullptr; }))
             return spun;
@@ -437,6 +447,8 @@ public:
 
     // Publishes the reserved slot holding `bytes` (at most what was reserved).
     void commit(size_t bytes) {
+        if (!reserved_)
+            throw std::logic_error("bufs: commit() without reserve()");
         if (bytes > reservedBytes_)
             throw std::logic_error("bufs: commit() larger than reserve()");
         writeHeader(reservedPos_ & (capacity_ - 1), static_cast<uint32_t>(bytes), kMessage);
@@ -444,10 +456,14 @@ public:
         control_->writeSeq.fetch_add(1, std::memory_order_seq_cst);
         if (control_->consumerWaiting.load(std::memory_order_seq_cst))
             detail::futexWake(&control_->writeSeq);
+        reserved_ = false;
         reservedBytes_ = 0;
     }
 
-    void cancel() { reservedBytes_ = 0; }
+    void cancel() {
+        reserved_ = false;
+        reservedBytes_ = 0;
+    }
 
     // Copies `bytes` in as one message; false when there is no room now.
     bool push(const void* bytes, size_t size) {
@@ -482,7 +498,7 @@ public:
                 if (length != tail - 8 || tail > end - pos)
                     throw CorruptRing("bufs: bad padding record");
                 pos += tail;
-                control_->readPos.store(pos, std::memory_order_release);
+                releaseTo(pos);
                 continue;
             }
             if (kind != kMessage || length > tail - 8 || 8 + align8(length) > end - pos)
@@ -500,10 +516,7 @@ public:
             throw std::logic_error("bufs: pop() without front()");
         const uint64_t pos = control_->readPos.load(std::memory_order_relaxed) + frontBytes_;
         frontBytes_ = 0;
-        control_->readPos.store(pos, std::memory_order_release);
-        control_->readSeq.fetch_add(1, std::memory_order_seq_cst);
-        if (control_->producerWaiting.load(std::memory_order_seq_cst))
-            detail::futexWake(&control_->readSeq);
+        releaseTo(pos);
     }
 
     bool empty() const {
@@ -519,7 +532,7 @@ public:
     bool wait(std::chrono::nanoseconds timeout, std::chrono::nanoseconds spin = std::chrono::nanoseconds(0)) {
         if (detail::spinFor(spin, [&] { return !empty(); }))
             return true;
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = detail::deadlineAfter(timeout);
         for (;;) {
             control_->consumerWaiting.store(1, std::memory_order_seq_cst);
             const uint32_t seq = control_->writeSeq.load(std::memory_order_seq_cst);
@@ -552,6 +565,14 @@ private:
     };
     static_assert(sizeof(Control) == 256, "ring control block layout");
 
+    // Frees everything before `pos` and wakes a producer waiting for room.
+    void releaseTo(uint64_t pos) {
+        control_->readPos.store(pos, std::memory_order_release);
+        control_->readSeq.fetch_add(1, std::memory_order_seq_cst);
+        if (control_->producerWaiting.load(std::memory_order_seq_cst))
+            detail::futexWake(&control_->readSeq);
+    }
+
     void writeHeader(uint64_t index, uint32_t length, uint32_t kind) {
         store<uint32_t>(data_ + index, length);
         store<uint32_t>(data_ + index + 4, kind);
@@ -562,6 +583,7 @@ private:
     uint64_t capacity_ = 0;
     uint64_t reservedPos_ = 0;
     size_t reservedBytes_ = 0;
+    bool reserved_ = false; // a reserve() is waiting for its commit() or cancel()
     uint64_t frontBytes_ = 0;
 };
 

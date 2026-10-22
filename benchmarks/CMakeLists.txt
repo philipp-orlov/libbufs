@@ -81,6 +81,3 @@ bufs_generate(bufs_bench_shm SCHEMAS ${bench_schema} OUTPUT_DIR ${CMAKE_CURRENT_
 target_include_directories(bufs_bench_shm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(bufs_bench_shm PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>)
 target_link_libraries(bufs_bench_shm PRIVATE Threads::Threads)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(bufs_bench_shm PRIVATE rt)
-endif()

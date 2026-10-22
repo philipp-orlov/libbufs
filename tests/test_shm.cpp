@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 
 #include "bufs/shm.hpp"
@@ -207,6 +208,36 @@ void corrupted() {
     CHECK(threw);
 }
 
+// commit() without a pending reserve() must throw, not rewind the ring.
+void commitWithoutReserve() {
+    alignas(64) static uint8_t memory[bufs::shm::Ring::bytesFor(256)];
+    bufs::shm::Ring ring = bufs::shm::Ring::initialize(memory, 256);
+    CHECK(ring.push("hello", 5));
+    bool threw = false;
+    try {
+        ring.commit(0);
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    CHECK(threw);
+
+    CHECK(ring.reserve(8) != nullptr);
+    ring.cancel();
+    threw = false;
+    try {
+        ring.commit(0);
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    CHECK(threw);
+
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    CHECK(ring.front(data, size) && size == 5 && std::memcmp(data, "hello", 5) == 0);
+    ring.pop();
+    CHECK(!ring.front(data, size) && ring.empty());
+}
+
 void regionLifetime() {
     const std::string name = uniqueName("region");
     {
@@ -237,6 +268,7 @@ int main() {
     regionLifetime();
     fullAndOversize();
     corrupted();
+    commitWithoutReserve();
     acrossProcesses();
     if (failures == 0)
         std::puts("libbufs shm: region, full ring, corruption and cross-process channel passed");
