@@ -104,7 +104,7 @@ For `table T` in namespace `ns`:
 |---|---|
 | `ns::T::typeId`, `ns::T::typeName` | The type id in the message header. |
 | `ns::T::Reader` | `x()` for every field: scalars by value, structs as `const S&`, strings as `std::string_view`, vectors as `bufs::Vector<E>` (`size()`, `operator[]`, `data()`, range-for), `bufs::BoolVector`, `bufs::StringVector`, `bufs::TableVector<U::Reader>`, tables as `U::Reader`. `hasX()` for strings, vectors and tables. A null `Reader` returns defaults. |
-| `ns::T::Builder` | `setX(value)` for scalars, enums, structs and strings; `setX(values, count)` and `initX(count)` (a `bufs::ListBuilder<E>`) for vectors of scalars and structs; `initX(count)` returning `bufs::StringListBuilder` or `bufs::TableListBuilder<U::Builder>` (`init(i)`) for vectors of strings and tables; `initX()` for a table field. |
+| `ns::T::Builder` | `setX(value)` for scalars, enums, structs and strings; `setX(values, count)` and `initX(count)` (a `bufs::ListBuilder<E>`, zeroed) and `initX(count, bufs::uninitialized)` (not zeroed: **write every element**, or pooled memory leaks into the message) for vectors of scalars and structs; `initX(count)` returning `bufs::StringListBuilder` or `bufs::TableListBuilder<U::Builder>` (`init(i)`) for vectors of strings and tables; `initX()` for a table field. |
 | `ns::T::verifyTable` | Used by `bufs::verify<ns::T>()`. |
 
 Field names become lowerCamelCase: `sample_rate` gives `sampleRate()`, `setSampleRate()`,
@@ -126,6 +126,8 @@ Runtime calls:
 | `bufs::verify<T>(data, size)`, `bufs::verifyStruct<S>(data, size)` | Check an untrusted message. |
 | `bufs::root<T>(data)`, `bufs::rootStruct<S>(data)` | Read a verified or self-built message. |
 | `bufs::typeOf(data, size)` | The header's type id, 0 when too short. |
+| `bufs::MessageStream(data, size)`, `bufs::verifyStream<T>(data, size)` | Walk or verify messages laid end to end (each starts with its own size). `next()` throws on a bad size. |
+| `bufs::vectorBytes()`, `stringBytes()`, `tableBytes()` | Upper bounds on what an object adds to a message, to size a block so a builder never grows. |
 | `bufs::BufferPool` | `global()`, `acquire()`, `stats()`, `trim()`. |
 
 ## Shared memory

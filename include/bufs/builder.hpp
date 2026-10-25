@@ -28,6 +28,22 @@
 
 namespace bufs {
 
+// Passed to a generated initX(count, bufs::uninitialized): the vector's
+// elements are left as they were in the pooled block, so the caller must write
+// every one of them. Skips a memset the caller would overwrite anyway.
+struct Uninitialized {};
+constexpr Uninitialized uninitialized{};
+
+// Upper bounds on the bytes an object adds to a message, alignment padding
+// included, for sizing a block so a builder never has to grow.
+constexpr size_t vectorBytes(size_t count, size_t elementBytes, size_t elementAlign) {
+    return align4(4 + count * elementBytes) + (elementAlign >= 8 ? 4 : 0);
+}
+constexpr size_t stringBytes(size_t length) { return vectorBytes(length + 1, 1, 1); }
+constexpr size_t tableBytes(uint16_t dataBytes, uint16_t refCount) {
+    return align4(dataBytes) + 4 * size_t{refCount} + 4;
+}
+
 // A finished message that owns its pooled block.
 class Message {
 public:

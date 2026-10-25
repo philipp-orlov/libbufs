@@ -478,6 +478,140 @@ void noHeapAfterWarmUp() {
 }
 
 
+std::vector<uint8_t> childMessage(const char* name, float score) {
+    bufs::MessageBuilder mb;
+    auto c = mb.initRoot<ev::Child>();
+    c.setName(name);
+    c.setScore(score);
+    const bufs::Message m = mb.release();
+    return std::vector<uint8_t>(m.data(), m.data() + m.size());
+}
+
+void messageStreams() {
+    std::vector<uint8_t> stream;
+    size_t sizes[3];
+    const char* names[] = {"a", "second", "the third message has a longer name"};
+    for (int i = 0; i < 3; ++i) {
+        const auto m = childMessage(names[i], float(i));
+        sizes[i] = m.size();
+        stream.insert(stream.end(), m.begin(), m.end());
+    }
+    {
+        bufs::MessageStream walk(stream.data(), stream.size());
+        const uint8_t* message = nullptr;
+        size_t size = 0;
+        for (int i = 0; i < 3; ++i) {
+            CHECK(walk.next(message, size));
+            CHECK(size == sizes[i]);
+            CHECK(bufs::root<ev::Child>(message).name() == names[i]);
+        }
+        CHECK(!walk.next(message, size));
+        CHECK(walk.offset() == stream.size());
+    }
+    CHECK(bufs::verifyStream<ev::Child>(stream.data(), stream.size()));
+    CHECK(!bufs::verifyStream<ev::Everything>(stream.data(), stream.size()));
+
+    const uint8_t* message = nullptr;
+    size_t size = 0;
+    CHECK(!bufs::MessageStream(stream.data(), 0).next(message, size));
+    CHECK(bufs::verifyStream<ev::Child>(stream.data(), 0));
+
+    auto throwsBad = [&](std::vector<uint8_t> bytes) {
+        try {
+            bufs::MessageStream walk(bytes.data(), bytes.size());
+            while (walk.next(message, size)) {
+            }
+        } catch (const std::runtime_error& e) {
+            return std::string(e.what()).rfind("bufs: bad message size at offset ", 0) == 0;
+        }
+        return false;
+    };
+    std::vector<uint8_t> notMultiple = stream;
+    bufs::store<uint32_t>(notMultiple.data(), 12);
+    CHECK(throwsBad(notMultiple));
+    std::vector<uint8_t> truncated(stream.begin(), stream.end() - 8);
+    CHECK(throwsBad(truncated));
+    CHECK(!bufs::verifyStream<ev::Child>(truncated.data(), truncated.size()));
+    std::vector<uint8_t> tiny(8, 0);
+    CHECK(throwsBad(tiny));
+    std::vector<uint8_t> shortTail(stream.begin(), stream.begin() + sizes[0] + 4);
+    CHECK(throwsBad(shortTail));
+
+    std::vector<uint8_t> corrupted = stream;
+    bufs::store<uint32_t>(corrupted.data() + sizes[0] + 4, ev::Everything::typeId);  // second message: another type
+    CHECK(!bufs::verifyStream<ev::Child>(corrupted.data(), corrupted.size()));
+}
+
+void uninitializedVectors() {
+    bufs::BufferPool pool;
+    bufs::MessageBuilder mb(pool, 64);
+    auto e = mb.initRoot<ev::Everything>();
+    e.setName("pad");  // leave the next vector at an odd 4-byte phase
+    auto longs = e.initLongs(1000, bufs::uninitialized);
+    CHECK(longs.size() == 1000);
+    int64_t* out = longs.data();
+    for (int i = 0; i < 1000; ++i)
+        out[i] = int64_t{i} * 1000003;
+    auto floats = e.initFloats(7, bufs::uninitialized);
+    for (int i = 0; i < 7; ++i)
+        floats.set(i, float(i) * 0.5f);
+    const bufs::Message m = mb.release();
+    CHECK(bufs::verify<ev::Everything>(m.data(), m.size()));
+    auto r = bufs::root<ev::Everything>(m.data());
+    CHECK(r.longs().size() == 1000);
+    CHECK(reinterpret_cast<uintptr_t>(r.longs().data()) % 8 == 0);
+    bool same = true;
+    for (int i = 0; i < 1000; ++i)
+        same = same && r.longs()[i] == int64_t{i} * 1000003;
+    CHECK(same);
+    CHECK(r.floats().size() == 7 && r.floats()[6] == 3.0f);
+    CHECK(r.name() == "pad");
+
+    // Padding in front of an uninitialized vector must still be zero: dirty a
+    // block, return it to the pool, build again and look for leaked bytes.
+    {
+        bufs::MessageBuilder dirty(pool, 4096);
+        auto d = dirty.initRoot<ev::Everything>();
+        auto junk = d.initLongs(400);
+        std::memset(junk.data(), 0xAB, 400 * 8);
+        (void)dirty.release();
+    }
+    bufs::MessageBuilder again(pool, 4096);
+    auto g = again.initRoot<ev::Everything>();
+    g.setName("x");
+    auto l = g.initLongs(3, bufs::uninitialized);
+    for (int i = 0; i < 3; ++i)
+        l.set(i, i);
+    const bufs::Message m2 = again.release();
+    bool clean = true;
+    for (size_t i = 0; i < m2.size(); ++i)
+        if (m2.data()[i] == 0xAB)
+            clean = false;
+    CHECK(clean);
+}
+
+void sizeHelpers() {
+    // Build objects one by one; the message never exceeds the sum of the bounds.
+    for (size_t count : {size_t{0}, size_t{1}, size_t{3}, size_t{4}, size_t{5}, size_t{31}}) {
+        for (size_t length : {size_t{0}, size_t{1}, size_t{2}, size_t{3}, size_t{4}, size_t{9}}) {
+            bufs::MessageBuilder mb;
+            auto e = mb.initRoot<ev::Everything>();
+            e.setName(std::string(length, 'x'));
+            e.initLongs(count, bufs::uninitialized);
+            e.initFloats(count);
+            e.initChild();
+            const size_t bound = bufs::kHeaderBytes + bufs::tableBytes(ev::Everything::kDataBytes, ev::Everything::kRefCount) +
+                                 bufs::stringBytes(length) + bufs::vectorBytes(count, 8, 8) +
+                                 bufs::vectorBytes(count, 4, 4) + bufs::tableBytes(ev::Child::kDataBytes, ev::Child::kRefCount);
+            const size_t used = mb.finish().second;
+            CHECK(used <= bound);
+            CHECK(used + 24 >= bound);  // a bound, not a wild overestimate
+        }
+    }
+    static_assert(bufs::vectorBytes(0, 8, 8) == 8, "empty 8-byte vector: count word plus worst-case padding");
+    static_assert(bufs::stringBytes(0) == 8, "NUL plus count");
+}
+
 } // namespace
 
 void* operator new(std::size_t size) {
@@ -502,6 +636,9 @@ int main() {
     poolThreads();
     idlePagesReleased();
     noHeapAfterWarmUp();
+    messageStreams();
+    uninitializedVectors();
+    sizeHelpers();
     if (failures == 0)
         std::puts("libbufs: round trip, defaults, fixed, growth, large, struct root, verifier and heap passed");
     return failures == 0 ? 0 : 1;

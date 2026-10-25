@@ -10,4 +10,5 @@
 #include "bufs/format.hpp"
 #include "bufs/pool.hpp"
 #include "bufs/reader.hpp"
+#include "bufs/stream.hpp"
 #include "bufs/verifier.hpp"

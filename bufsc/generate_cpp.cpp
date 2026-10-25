@@ -428,6 +428,7 @@ private:
                     break;
                 default:
                     line("    ::bufs::ListBuilder<" + element + "> " + init + "(size_t count);");
+                    line("    ::bufs::ListBuilder<" + element + "> " + init + "(size_t count, ::bufs::Uninitialized);");
                     line("    void " + set + "(const " + element + "* values, size_t count);");
                     break;
                 }
@@ -534,6 +535,13 @@ private:
                     line("inline ::bufs::ListBuilder<" + element + "> " + builder + init + "(size_t count) {");
                     line("    const uint32_t at = bufsMessage_->allocateVector(count, sizeof(" + element + "), alignof(" +
                          element + ") >= 8 ? 8 : 4);");
+                    line("    bufsMessage_->setRef(" + slot + ", at);");
+                    line("    return ::bufs::ListBuilder<" + element + ">(*bufsMessage_, at);");
+                    line("}");
+                    line("inline ::bufs::ListBuilder<" + element + "> " + builder + init +
+                         "(size_t count, ::bufs::Uninitialized) {");
+                    line("    const uint32_t at = bufsMessage_->allocateVector(count, sizeof(" + element + "), alignof(" +
+                         element + ") >= 8 ? 8 : 4, false);");
                     line("    bufsMessage_->setRef(" + slot + ", at);");
                     line("    return ::bufs::ListBuilder<" + element + ">(*bufsMessage_, at);");
                     line("}");
