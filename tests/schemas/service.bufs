@@ -1,0 +1,9 @@
+namespace svc;
+table Req { x:int; }
+table Resp { y:int; }
+/// A service.
+rpc_service Api {
+    /// Doubles x.
+    Double(Req):Resp;
+    Watch(svc.Req):Resp (streaming: "server", idempotent);
+}

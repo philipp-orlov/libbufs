@@ -4,6 +4,8 @@
 // bufsc: the libbufs schema compiler.
 //
 //   bufsc [-o DIR] [-I DIR]... SCHEMA.bufs...      writes DIR/<stem>.bufs.hpp per schema
+//   bufsc ... --ts --cs --py [--no-cpp]            also (or instead) writes <stem>.bufs.ts, <stem>.bufs.cs and
+//                                              <stem>_bufs.py: the same messages for TypeScript, C# and Python
 //   bufsc ... --depfile FILE SCHEMA.bufs            also writes a Makefile-style list of
 //                                              every schema read, for the build
 //   bufsc --check OLD.bufs NEW.bufs [-I DIR]...     exits 1 if NEW cannot read OLD's
@@ -15,13 +17,14 @@
 #include <string>
 #include <vector>
 
+#include "generators.hpp"
 #include "schema.hpp"
 
 namespace {
 
 void usage() {
     std::fprintf(stderr,
-                 "usage: bufsc [-o DIR] [-I DIR]... [--depfile FILE] SCHEMA.bufs...\n"
+                 "usage: bufsc [-o DIR] [-I DIR]... [--ts] [--cs] [--py] [--no-cpp] [--runtime MODULE] [--depfile FILE] SCHEMA.bufs...\n"
                  "       bufsc --check OLD.bufs NEW.bufs [-I DIR]...\n"
                  "       bufsc --layout SCHEMA.bufs [-I DIR]...\n");
 }
@@ -54,6 +57,8 @@ int main(int argc, char** argv) {
     std::vector<std::string> files;
     bool check = false;
     bool layout = false;
+    bool ts = false, cs = false, py = false, noCpp = false;
+    std::string runtime;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "-o" && i + 1 < argc) {
@@ -68,6 +73,16 @@ int main(int argc, char** argv) {
             check = true;
         } else if (arg == "--layout") {
             layout = true;
+        } else if (arg == "--ts") {
+            ts = true;
+        } else if (arg == "--cs") {
+            cs = true;
+        } else if (arg == "--py") {
+            py = true;
+        } else if (arg == "--no-cpp") {
+            noCpp = true;
+        } else if ((arg == "--runtime" || arg == "--ts-runtime") && i + 1 < argc) {
+            runtime = argv[++i];
         } else if (arg == "-h" || arg == "--help") {
             usage();
             return 0;
@@ -99,7 +114,18 @@ int main(int argc, char** argv) {
         }
         for (const std::string& file : files) {
             const bufsc::Schema schema = bufsc::load(file, includeDirs);
-            const std::string output = bufsc::generateCpp(schema, outDir);
+            std::string output = file;
+            if (!noCpp)
+                output = bufsc::generateCpp(schema, outDir);
+            bufsc::GenOptions options;
+            options.outDir = outDir;
+            options.runtime = runtime;
+            if (ts)
+                bufsc::generateTypeScript(schema, options);
+            if (cs)
+                bufsc::generateCSharp(schema, options);
+            if (py)
+                bufsc::generatePython(schema, options);
             if (!depfile.empty()) {
                 std::FILE* out = std::fopen(depfile.c_str(), "w");
                 if (!out) {

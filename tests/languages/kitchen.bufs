@@ -1,0 +1,50 @@
+/// Every kind of field, to prove that the codecs of every language agree byte for byte, defaults included.
+namespace test;
+
+enum Color : short { Red = 1, Green = 5, Blue = -2 }
+
+struct Vec {
+    x:float;
+    y:float;
+    z:float;
+    tag:[ubyte:3];
+    flag:bool;
+    big:long;
+}
+
+table Inner {
+    n:int = 7;
+    s:string;
+}
+
+table Kitchen {
+    tag:uint;                  // 0: the reference values, 1: all defaults (what Check expects)
+    b:bool;
+    bt:bool = true;
+    i8:byte = -3;
+    u8:ubyte = 200;
+    i16:short = -1000;
+    u16:ushort = 65000;
+    i32:int = -123456;
+    u32:uint = 4000000000;
+    i64:long = -9007199254740993;
+    u64:ulong = 18446744073709551615;
+    f32:float = 1.5;
+    f64:double = -2.25;
+    color:Color = Green;
+    text:string;
+    vec:Vec;
+    inner:Inner;
+    bytes:[ubyte];
+    i8s:[byte];
+    ints:[int];
+    longs:[long];
+    doubles:[double];
+    bools:[bool];
+    names:[string];
+    colors:[Color];
+    inners:[Inner];
+    vecs:[Vec];
+    late:int = 99;
+}
+

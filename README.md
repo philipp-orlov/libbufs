@@ -1,6 +1,6 @@
 # libbufs
 
-Zero-copy binary messages for C++17, with a schema compiler. A message is built front to back
+Zero-copy binary messages for C++17, TypeScript, C# and Python, with a schema compiler. A message is built front to back
 into pooled memory or straight into a shared-memory slot, read in place with generated
 accessors, and verified before an untrusted one is read. Once warm, nothing on the message path
 touches the malloc heap. Made for small request/reply messages between the processes of a
@@ -8,8 +8,11 @@ long-running service, and fine with large payloads too.
 
 * `include/bufs/`: the header-only runtime (`bufs.hpp` for messages, `shm.hpp` for the
   shared-memory transport).
-* `bufsc/`: `bufsc`, which compiles a FlatBuffers-style schema into one C++ header.
+* `bufsc/`: `bufsc`, which compiles a FlatBuffers-style schema into one C++ header and, on request, the same messages
+  for TypeScript, C# and Python.
+* `ts/`, `cs/`, `python/`: the runtimes of those languages (see "Languages").
 * `docs/design.md`: the wire format, layout and evolution rules, memory and transport design.
+* `examples/`: the same program in every language (see "Languages").
 * `tests/`, `benchmarks/`.
 
 ## Quick start
@@ -90,6 +93,7 @@ schema.
 | `root_type T;` | Optional. Any table or struct can be a message root. |
 | `///` comments | Copied into the generated header. |
 | `attribute`, `file_identifier`, `file_extension` | Accepted and ignored. |
+| `rpc_service S { M(Req):Resp (streaming: "server"); }` | Parsed and checked (both types must be tables), then ignored by `bufsc`. `rpcc` in librpc turns services into C++, TypeScript, C# and Python clients (and C++ servers). |
 
 Scalar types: `bool byte ubyte short ushort int uint long ulong float double` and the sized
 spellings (`int8` ... `uint64`, `float32`, `float64`). Float defaults may be `nan`, `inf`,
@@ -129,6 +133,56 @@ Runtime calls:
 | `bufs::MessageStream(data, size)`, `bufs::verifyStream<T>(data, size)` | Walk or verify messages laid end to end (each starts with its own size). `next()` throws on a bad size. |
 | `bufs::vectorBytes()`, `stringBytes()`, `tableBytes()` | Upper bounds on what an object adds to a message, to size a block so a builder never grows. |
 | `bufs::BufferPool` | `global()`, `acquire()`, `stats()`, `trim()`. |
+
+## Languages
+
+One schema, one wire format, four languages. `bufsc` always writes the C++ header; add a flag for the others (`--no-cpp`
+leaves the C++ out):
+
+| Language | Flag | Writes | Runtime | Reads | Builds with |
+|---|---|---|---|---|---|
+| C++17 | (default) | `<stem>.bufs.hpp` | [include/bufs](include/bufs) (header-only) | in place, with a verifier | `Message`/`MessageBuilder`, pooled or shared memory |
+| TypeScript | `--ts` | `<stem>.bufs.ts` | [ts/src/bufs.ts](ts/src/bufs.ts) (module `@bufs/runtime`; `--runtime MODULE` renames it) | lazy getters over a `DataView` | `T.encode({...})` |
+| C# (.NET; built for net10.0) | `--cs` | `<stem>.bufs.cs` | [cs/Bufs](cs/Bufs) (project `Bufs.csproj`, namespace `Bufs`) | `readonly struct` readers over `ReadOnlyMemory<byte>`, scalar vectors as `ReadOnlySpan<T>` | `T.Encode(new TInit {...})` |
+| Python 3 (tested on 3.12) | `--py` | `<stem>_bufs.py` | [python/bufs](python/bufs) (package `bufs`, no dependencies) | properties over a `memoryview` | `T.encode({...})` or keywords |
+
+Every language reads in place and checks bounds as it reads (a malformed message raises instead of reading outside itself); only
+C++ also has the full `verify<T>()` pass. All of them implement the same rules: scalars stored XOR their default, so a field
+a writer left out reads as its default and new fields can be added at the end of a table, and each produces the C++ builder's
+bytes exactly (`tests/languages` checks this byte for byte, both directions, on a schema with every field type).
+
+```
+bufsc --ts --cs --py -o gen telemetry.bufs         # telemetry.bufs.hpp, telemetry.bufs.ts, telemetry.bufs.cs, telemetry_bufs.py
+bufsc --ts --no-cpp -o gen telemetry.bufs          # TypeScript only
+```
+
+```cmake
+bufs_generate(app SCHEMAS telemetry.bufs TS CS PY)  # the flags of bufsc, as CMake options
+```
+
+How a schema maps to each language:
+
+| Schema | TypeScript | C# | Python |
+|---|---|---|---|
+| `enum E : ubyte` | `enum E` | `enum E : byte` | `class E(IntEnum)` |
+| `struct S` | `interface S` | `struct S` | `class S(Struct)` with keyword init |
+| `table T` | `class T` (reader), `TInit` | `readonly struct T` (reader), `class TInit` | `class T` (reader), init as a dict |
+| 64-bit integer | `bigint` | `long`, `ulong` | `int` |
+| `string`, `[string]` | `string`, `string[]` | `string`, `string[]` | `str`, `list[str]` |
+| `[ubyte]` | `Uint8Array` | `ReadOnlySpan<byte>` | `bytes` |
+| other `[scalar]`, `[struct]`, `[Table]` | arrays | `ReadOnlySpan<T>` or arrays | lists |
+| a missing table | `null` | `null` | `None` |
+
+```python
+from telemetry_bufs import Batch, Unit            # bufsc --py
+data = Batch.encode(station="alpha", readings=[dict(unit=Unit.Celsius, value=21.5)])
+batch = Batch.decode(data)                         # raises MalformedMessage for bytes that are not a Batch
+print(batch.station, [r.value for r in batch.readings])
+```
+
+[examples/](examples) has one small program per language, [team.bufs](examples/team.bufs) with `cpp/`, `python/`, `ts/` and
+`cs/People/`: each writes the message and reads it back, and `ctest -R bufs_examples` has every language read what every other one
+wrote. The tools needed are optional: a language whose tools are missing (`node` and `esbuild`, `dotnet`, `python3`) is skipped.
 
 ## Shared memory
 
@@ -238,6 +292,7 @@ pass `-DBUFSC_EXECUTABLE=/path/to/bufsc`.
 ```
 bufsc [-o DIR] [-I DIR]... SCHEMA.bufs...     write DIR/<stem>.bufs.hpp (every header flat in DIR)
 bufsc ... --depfile FILE SCHEMA.bufs          also list every schema read, for the build system
+bufsc ... --ts --cs --py [--no-cpp]            also (or only) write the messages for TypeScript, C# and Python
 bufsc --check OLD.bufs NEW.bufs                list changes that break old or new readers; exit 1 if any
 bufsc --layout SCHEMA.bufs                    print every table's field offsets and type ids
 ```
@@ -257,6 +312,10 @@ bufsc --layout SCHEMA.bufs                    print every table's field offsets 
   file left by a dead process, and a channel handed to another process over a local socket and
   driven by doorbells, with replies too large for it sent inline.
 * `bufs_evolution`: two schema versions each read the other's messages.
+* `bufs_languages`: C++ writes the reference messages of `tests/languages/kitchen.bufs` (every field type, with and without defaults);
+  TypeScript, C# and Python read them, check every value, encode the same values and write them back, and C++ verifies and reads
+  those; each encoding is also compared to C++'s bytes.
+* `bufs_examples`: the example programs of every language, each reading what every one wrote.
 * `bufs_check_*`, `bufs_reject_*`: `bufsc --check` and schemas bufsc must refuse.
 * `tests/schemas/tricky.bufs` (in `bufs_round_trip`): keywords as names, a struct declared after
   its user, struct bools, a table shadowing an outer enum, float defaults such as `NaN` and

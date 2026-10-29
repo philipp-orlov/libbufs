@@ -45,3 +45,25 @@ foreach(case "union_type|unions are not supported" "unknown_type|unknown type 'M
     add_test(NAME bufs_reject_${bad} COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/bad/${bad}.bufs)
     set_tests_properties(bufs_reject_${bad} PROPERTIES PASS_REGULAR_EXPRESSION "bufsc: .*${bad}.bufs:[0-9]+: .*${expected}")
 endforeach()
+
+# rpc_service blocks (compiled by librpc's rpcc) are parsed, checked and otherwise ignored.
+add_test(NAME bufs_accept_rpc_service COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/service.bufs)
+add_test(NAME bufs_reject_service_type COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/bad/service_type.bufs)
+set_tests_properties(bufs_reject_service_type PROPERTIES
+    PASS_REGULAR_EXPRESSION "bufsc: .*service_type.bufs:[0-9]+: .*'Color' \\(S.M\\) is not a table")
+
+# The same messages in every language: C++ writes, TypeScript, C# and Python read, check, encode and write back, C++ verifies
+# (tests/languages/run.cmake). Languages whose tools are missing are skipped.
+add_executable(bufs_golden languages/golden.cpp)
+bufs_generate(bufs_golden SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/languages/kitchen.bufs)
+find_program(BUFS_PYTHON NAMES python3 python)
+find_program(BUFS_NODE node)
+find_program(BUFS_DOTNET dotnet HINTS $ENV{DOTNET_ROOT} $ENV{HOME}/.dotnet)
+set(BUFS_ESBUILD_HINTS ${CMAKE_CURRENT_SOURCE_DIR}/../ts/node_modules/.bin ${CMAKE_CURRENT_SOURCE_DIR}/../../librpc/ts/node_modules/.bin)
+find_program(BUFS_ESBUILD esbuild HINTS ${BUFS_ESBUILD_HINTS} NO_DEFAULT_PATH)
+add_test(NAME bufs_languages
+         COMMAND ${CMAKE_COMMAND} -DBUFSC=$<TARGET_FILE:bufsc> -DGOLDEN=$<TARGET_FILE:bufs_golden>
+                 -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/.. -DWORK=${CMAKE_CURRENT_BINARY_DIR}/languages
+                 -DPYTHON=${BUFS_PYTHON} -DNODE=${BUFS_NODE} -DESBUILD=${BUFS_ESBUILD} -DDOTNET=${BUFS_DOTNET}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/languages/run.cmake)
+set_tests_properties(bufs_languages PROPERTIES TIMEOUT 300)

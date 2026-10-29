@@ -691,4 +691,7 @@ std::string generateCpp(const Schema& schema, const std::string& outDir) {
     return path;
 }
 
+std::string cppAccessorName(const std::string& fieldName) { return accessor(fieldName); }
+std::string cppPrefixedName(const char* prefix, const std::string& fieldName) { return prefixed(prefix, fieldName); }
+
 } // namespace bufsc

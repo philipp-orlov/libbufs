@@ -229,7 +229,7 @@ public:
                 fail(keyword.line, "unions are not supported: send each type as its own message and dispatch on "
                                    "bufs::typeOf()");
             } else if (keyword.text == "rpc_service") {
-                fail(keyword.line, "rpc_service is not supported");
+                parseService(doc, keyword.line);
             } else {
                 fail(keyword.line, "unexpected '" + keyword.text + "'");
             }
@@ -252,6 +252,14 @@ public:
             resolveFields(*s, s->fields);
         for (auto& t : schema_.tables)
             resolveFields(*t, t->fields);
+        for (auto& s : schema_.services) {
+            for (RpcMethod& m : s->methods) {
+                if (m.natural)
+                    lowerNaturalMethod(*s, m);
+                else
+                    resolveTableMethod(*s, m);
+            }
+        }
         if (!rootType_.name.empty()) {
             Type t;
             t.name = rootType_.name;
@@ -296,6 +304,92 @@ private:
             const size_t dot = scope.rfind('.');
             scope = dot == std::string::npos ? std::string() : scope.substr(0, dot);
         }
+    }
+
+    void resolveTrailer(const ServiceDef& s, RpcMethod& m) {
+        const auto found = m.attributes.find("trailer");
+        if (found == m.attributes.end())
+            return;
+        const std::string where = s.file + ":" + std::to_string(m.line) + ": " + s.name + "." + m.name + ": ";
+        if (m.streaming != "server")
+            throw SchemaError(where + "a trailer belongs to a streaming method");
+        Type t;
+        t.name = found->second;
+        if (!find(t, s.ns) || t.base != Base::Table)
+            throw SchemaError(where + "trailer '" + found->second + "' is not a table");
+        m.trailerDef = t.tableDef;
+    }
+
+    // Name(Request):Response
+    void resolveTableMethod(const ServiceDef& s, RpcMethod& m) {
+        auto table = [&](const std::string& name, const TableDef*& out) {
+            Type t;
+            t.name = name;
+            if (!find(t, s.ns) || t.base != Base::Table)
+                throw SchemaError(s.file + ":" + std::to_string(m.line) + ": '" + name + "' (" + s.name + "." + m.name +
+                                  ") is not a table");
+            out = t.tableDef;
+        };
+        table(m.request, m.requestDef);
+        table(m.response, m.responseDef);
+        resolveTrailer(s, m);
+    }
+
+    // Name(a:double, b:string):result -> a request table, and a response table unless the result is one.
+    void lowerNaturalMethod(const ServiceDef& s, RpcMethod& m) {
+        const std::string where = s.file + ":" + std::to_string(m.line) + ": " + s.name + "." + m.name + ": ";
+        auto resolveType = [&](Type& t, const std::string& what) {
+            if (!t.name.empty() && !find(t, s.ns))
+                throw SchemaError(where + "unknown type '" + t.name + "' of " + what);
+            if (t.vector && t.base == Base::Table)
+                throw SchemaError(where + what + " is a vector of tables; wrap them in a table and use that");
+        };
+        for (Field& f : m.params)
+            resolveType(f.type, "parameter '" + f.name + "'");
+        if (!m.isVoid)
+            resolveType(m.result, "the result");
+        if (m.inputStream)
+            resolveType(m.input.type, "stream parameter '" + m.input.name + "'");
+
+        auto synthesize = [&](const std::string& suffix, std::vector<Field> fields) {
+            auto def = std::make_unique<TableDef>();
+            def->name = s.name + m.name + suffix;
+            def->ns = s.ns;
+            def->file = s.file;
+            def->line = m.line;
+            def->fields = std::move(fields);
+            if (!names_.insert(def->qualified()).second)
+                throw SchemaError(where + "the generated table '" + def->qualified() + "' collides with another definition");
+            const TableDef* raw = def.get();
+            schema_.tables.push_back(std::move(def));
+            return raw;
+        };
+        m.requestDef = synthesize("Request", m.params);
+        if (m.inputStream) {
+            if (m.input.type.base == Base::Table && !m.input.type.vector) {
+                m.inputDef = m.input.type.tableDef;
+            } else {
+                Field item = m.input;
+                item.name = "item";
+                m.inputDef = synthesize("Item", {std::move(item)});
+                m.inputWrapped = true;
+            }
+        }
+        if (!m.isVoid && m.result.base == Base::Table && !m.result.vector) {
+            m.responseDef = m.result.tableDef;
+        } else {
+            std::vector<Field> fields;
+            if (!m.isVoid) {
+                Field f;
+                f.name = "result";
+                f.type = m.result;
+                f.line = m.line;
+                fields.push_back(std::move(f));
+                m.resultWrapped = true;
+            }
+            m.responseDef = synthesize("Response", std::move(fields));
+        }
+        resolveTrailer(s, m);
     }
 
     std::string locate(const std::string& name, const std::string& from, int line) {
@@ -346,6 +440,148 @@ private:
         if (def->values.empty())
             fail(line, "enum '" + def->name + "' has no values");
         add(schema_.enums, std::move(def));
+    }
+
+    // rpc_service Name { Method(Request):Response (streaming: "server"); ... }
+    // The request and response must be tables (checked in resolve()).
+    void parseService(const std::vector<std::string>& doc, int line) {
+        auto def = std::make_unique<ServiceDef>();
+        start(*def, doc, line);
+        expectPunct("{");
+        while (!isPunct("}")) {
+            RpcMethod m;
+            m.doc = lexer_->takeDoc();
+            const Token name = expect(Token::Ident, "a method name");
+            m.name = name.text;
+            m.line = name.line;
+            for (const RpcMethod& other : def->methods)
+                if (other.name == m.name)
+                    fail(name.line, "duplicate method '" + m.name + "'");
+            expectPunct("(");
+            if (isPunct(")")) {
+                m.natural = true;
+                advance();
+            } else {
+                const Token first = expect(Token::Ident, "a parameter or a request type");
+                if (isPunct(":")) {  // Name(a:double, b:string = "x"):result
+                    m.natural = true;
+                    std::string pname = first.text;
+                    int pline = first.line;
+                    for (;;) {
+                        advance();  // the ':'
+                        Field f;
+                        f.name = pname;
+                        f.line = pline;
+                        bool streamed = false;
+                        if (token_.kind == Token::Ident && token_.text == "stream") {
+                            advance();
+                            streamed = true;
+                        }
+                        f.type = parseType(true);
+                        if (streamed) {
+                            if (m.inputStream)
+                                fail(f.line, "a method has at most one stream parameter");
+                            if (isPunct("="))
+                                fail(token_.line, "a stream parameter takes no default");
+                            m.inputStream = true;
+                            m.input = std::move(f);
+                            if (isPunct(",")) {
+                                advance();
+                                const Token next = expect(Token::Ident, "a parameter name");
+                                pname = next.text;
+                                pline = next.line;
+                                if (!isPunct(":"))
+                                    fail(next.line, "expected ':' after the parameter name");
+                                continue;
+                            }
+                            break;
+                        }
+                        if (isPunct("=")) {
+                            advance();
+                            if (token_.kind != Token::Number && token_.kind != Token::Ident)
+                                fail(token_.line, "expected a default value");
+                            f.defaultText = token_.text;
+                            advance();
+                        }
+                        for (const Field& other : m.params)
+                            if (other.name == f.name)
+                                fail(f.line, "duplicate parameter '" + f.name + "'");
+                        m.params.push_back(std::move(f));
+                        if (isPunct(",")) {
+                            advance();
+                            const Token next = expect(Token::Ident, "a parameter name");
+                            pname = next.text;
+                            pline = next.line;
+                            if (!isPunct(":"))
+                                fail(next.line, "expected ':' after the parameter name");
+                            continue;
+                        }
+                        break;
+                    }
+                    expectPunct(")");
+                } else {  // Name(Request):Response
+                    std::string name = first.text;
+                    while (isPunct(".")) {
+                        advance();
+                        name += "." + expect(Token::Ident, "a name").text;
+                    }
+                    m.request = name;
+                    expectPunct(")");
+                }
+            }
+            expectPunct(":");
+            if (token_.kind == Token::Ident && token_.text == "void" && m.natural) {
+                m.isVoid = true;
+                advance();
+            } else if (token_.kind == Token::Ident && token_.text == "stream") {
+                advance();
+                m.streaming = "server";
+                m.attributes["streaming"] = "server";
+                if (m.natural)
+                    m.result = parseType(true);
+                else
+                    m.response = qualifiedName();
+            } else if (m.natural) {
+                m.result = parseType(true);
+            } else {
+                m.response = qualifiedName();
+            }
+            if (isPunct("(")) {
+                advance();
+                while (!isPunct(")")) {
+                    const Token key = expect(Token::Ident, "an attribute name");
+                    std::string value;
+                    if (isPunct(":")) {
+                        advance();
+                        if (token_.kind != Token::String && token_.kind != Token::Number && token_.kind != Token::Ident)
+                            fail(token_.line, "expected an attribute value");
+                        value = token_.text;
+                        advance();
+                    }
+                    m.attributes[key.text] = value;
+                    if (isPunct(","))
+                        advance();
+                    else if (!isPunct(")"))
+                        fail(token_.line, "expected ',' or ')'");
+                }
+                advance();
+            }
+            expectPunct(";");
+            const auto streaming = m.attributes.find("streaming");
+            if (streaming != m.attributes.end() && !(m.natural && streaming->second == "server" && m.streaming == "server")) {
+                m.streaming = streaming->second;
+                if (m.streaming != "none" && m.streaming != "server" && m.streaming != "client" &&
+                    m.streaming != "bidi")
+                    fail(m.line, "streaming must be \"none\", \"server\", \"client\" or \"bidi\"");
+            }
+            if (m.natural && m.inputStream)
+                m.streaming = m.streaming == "server" ? "bidi" : "client";
+            def->methods.push_back(std::move(m));
+        }
+        advance();
+        if (def->methods.empty())
+            fail(line, "rpc_service '" + def->name + "' has no methods");
+        add(schema_.services, std::move(def));
     }
 
     void parseStruct(const std::vector<std::string>& doc, int line) {

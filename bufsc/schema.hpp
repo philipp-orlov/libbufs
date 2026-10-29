@@ -94,11 +94,47 @@ struct TableDef : Definition {
     uint32_t refCount = 0;
 };
 
+// One method of an rpc_service: `Name(Request):Response (streaming: "server");`
+// The generators of libbufs ignore services; librpc's rpcc compiles them.
+struct RpcMethod {
+    std::string name;
+    std::string request;   // as written
+    std::string response;  // as written
+    std::string streaming = "none"; // none, server, client or bidi
+    std::map<std::string, std::string> attributes;
+    std::vector<std::string> doc;
+    int line = 0;
+    const TableDef* requestDef = nullptr;
+    const TableDef* responseDef = nullptr;
+    // `(trailer: "Type")` on a streaming method: a table sent once behind the end of the stream (rpc only).
+    const TableDef* trailerDef = nullptr;
+
+    // `Name(a:double, b:double):double` -- the natural form. The parser turns the parameters into a request
+    // table and a non-table result into a one-field response table (`result`), both added to Schema::tables as
+    // <Service><Method>Request / <Service><Method>Response; a table result is the response itself.
+    bool natural = false;
+    std::vector<Field> params;     // resolved
+    Type result;                   // resolved; meaningless when isVoid
+    bool isVoid = false;
+    bool resultWrapped = false;
+    // `Name(x: stream T, ...)`: the client streams items of T (client streaming; with a `stream` result, bidirectional).
+    // The item is the table `inputDef` (T itself if it is a table, else a one-field table `item`).
+    bool inputStream = false;
+    Field input;                   // the stream parameter (name, resolved type)
+    const TableDef* inputDef = nullptr;
+    bool inputWrapped = false;    // the response table holds the result in its field `result`
+};
+
+struct ServiceDef : Definition {
+    std::vector<RpcMethod> methods;
+};
+
 // Every definition of a schema and the files it includes, in declaration order.
 struct Schema {
     std::vector<std::unique_ptr<EnumDef>> enums;
     std::vector<std::unique_ptr<StructDef>> structs;
     std::vector<std::unique_ptr<TableDef>> tables;
+    std::vector<std::unique_ptr<ServiceDef>> services;
     std::string mainFile;                 // the file given on the command line
     std::vector<std::string> includes;    // as written in the main file
     std::string rootType;                 // qualified, may be empty
@@ -123,6 +159,11 @@ const char* baseName(Base base);
 
 // The C++ type that holds `type` (one element when it is a vector).
 std::string cppElementType(const Type& type);
+
+// The names the generated classes use for a field: `sampleRate` / `class_` (Reader accessor), `setSampleRate`,
+// `initSampleRate` (Builder).
+std::string cppAccessorName(const std::string& fieldName);
+std::string cppPrefixedName(const char* prefix, const std::string& fieldName);
 
 // Writes `<stem>.bufs.hpp` for the main file of `schema` into `outDir`.
 // Returns the path written.

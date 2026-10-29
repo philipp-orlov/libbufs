@@ -1,7 +1,7 @@
 # libbufs design
 
 libbufs is a binary message format with a schema compiler (`bufsc`) and a header-only C++17
-runtime. It plays the role FlatBuffers plays (schema, generated accessors, zero-copy reads), with
+runtime; TypeScript, C# and Python read and write the same format (section 8). It plays the role FlatBuffers plays (schema, generated accessors, zero-copy reads), with
 three goals:
 
 1. **No heap traffic.** Building, verifying and reading a message allocate nothing from the
@@ -233,3 +233,15 @@ already share); the format is the same either way.
 * Little-endian targets only (x86-64, ARM64). The shared-memory transport is Linux only (futex).
 * No unions, no vectors of vectors, no JSON, no reflection, no optional (`= null`) scalars: use a
   sentinel default (e.g. `-1` for "use the server's value").
+
+## 8. Other languages
+
+`bufsc --ts`, `--cs` and `--py` write the messages of a schema for TypeScript, C# and Python, against runtimes in `ts/`, `cs/` and
+`python/` that implement sections 1 to 3: the table header (`dataBytes`, `refCount`), data fields XOR their defaults, forward
+references from their own slot, 8-aligned tables and vectors (4 mod 8 for 8-byte elements), strings with a trailing NUL, and the
+builder's allocation order, so a message built in any of them is byte for byte the one the C++ builder makes for the same values
+(`tests/languages` checks it). The readers are lazy: a getter reads the bytes it is asked about, nothing is decoded up front. Bounds
+are checked by the language (`DataView` and spans throw, Python raises), so none of them has a verifier; a field past the writer's
+data section reads as its default (the evolution rule of section 2). The generators are classes (`bufsc/gen_ts.hpp`, `gen_cs.hpp`,
+`gen_py.hpp`) that a program with more to say about a schema derives from: librpc's `rpcc` adds the clients of `rpc_service`
+blocks that way.

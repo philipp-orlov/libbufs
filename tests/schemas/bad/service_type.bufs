@@ -1,0 +1,4 @@
+namespace svc;
+enum Color : ubyte { Red }
+table Resp { y:int; }
+rpc_service S { M(Color):Resp; }
