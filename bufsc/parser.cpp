@@ -630,6 +630,7 @@ private:
                 if (!f.type.vector || (f.type.base != Base::UInt8 && f.type.base != Base::Int8))
                     fail(attribute.line, "only a [ubyte] or [byte] field can be (shared)");
                 f.shared = true;
+                f.doc.push_back("(shared) bulk bytes: librpc sends them by reference on a local socket, inline elsewhere.");
             }
             if (isPunct(":")) {
                 advance();
