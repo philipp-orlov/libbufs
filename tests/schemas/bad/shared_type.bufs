@@ -1,0 +1,2 @@
+namespace bad;
+table T { name:string (shared); }

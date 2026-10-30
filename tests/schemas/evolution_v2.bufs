@@ -1,0 +1,24 @@
+// evolution_v1.bufs, evolved: a new enum value, a new table, new fields at the
+// end, and a deprecated field. Readers of either version read both.
+
+namespace test.evolution;
+
+enum Kind : ubyte { A, B, C }
+
+table Pet {
+    name:string;
+    legs:ubyte = 4;
+}
+
+table Person {
+    name:string;
+    age:ushort = 30;
+    kind:Kind;
+    tags:[string] (deprecated);
+    height:float = 1.75;
+    vip:bool;
+    pets:[Pet];
+    nickname:string;
+}
+
+root_type Person;

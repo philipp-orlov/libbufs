@@ -1,0 +1,75 @@
+// Every feature bufsc supports, for the round-trip and verifier tests.
+
+include "common.bufs";
+
+namespace test.everything;
+
+/// Colors with gaps and a non-zero default.
+enum Color : ubyte { Red = 1, Green = 2, Blue = 8 }
+
+enum Big : long { Small = -5, Large = 1099511627776 }
+
+struct Point {
+    x:float;
+    y:float;
+}
+
+/// Mixed sizes, so the layout has padding.
+struct Mixed {
+    flag:ubyte;
+    value:double;
+    small:short;
+    color:Color;
+    at:Point;
+}
+
+struct Embedding {
+    values:[float:8];
+    code:[ubyte:3];
+}
+
+table Child {
+    name:string;
+    score:float = 0.5;
+    next:Child;
+}
+
+table Everything {
+    b1:bool;
+    i8:byte = -3;
+    u8:ubyte = 200;
+    b2:bool = true;
+    i16:short = -1000;
+    u16:ushort = 60000;
+    i32:int = -100000;
+    u32:uint = 4000000000;
+    i64:long = -5000000000;
+    u64:ulong = 18000000000000000000;
+    f32:float = 1.5;
+    f64:double = -2.25;
+    nan_default:float = nan;
+    color:Color = Blue;
+    big:Big = Large;
+    mixed:Mixed;
+    point:Point;
+    embedding:Embedding;
+    name:string;
+    empty_name:string;
+    floats:[float];
+    doubles:[double];
+    longs:[long];
+    bools:[bool];
+    colors:[Color];
+    points:[Point];
+    mixeds:[Mixed];
+    names:[string];
+    children:[Child];
+    child:Child;
+    bytes:[ubyte];
+    old_field:int (deprecated);
+    b3:bool;
+    shared:test.common.Shared;
+    shareds:[test.common.Shared];
+}
+
+root_type Everything;

@@ -1,0 +1,33 @@
+// Schemas that once generated wrong or uncompilable code.
+
+enum Kind : byte { Outer }
+
+namespace tricky;
+
+/// Declared before the struct it holds.
+struct Outer { inner:Inner; flag:bool; }
+
+struct Inner { x:int; ready:bool; }
+
+/// Keywords as names.
+enum Op : ubyte { new, delete, class }
+
+/// The same name as the global enum: inside this namespace it is this table.
+table Kind { x:int; }
+
+table Node { kids:[Node]; }
+
+table Keywords {
+    table:int;
+    new:int;
+    decltype:float;
+    class:string;
+    op:Op = delete;
+    kind:Kind;
+    outer:Outer;
+    not_a_number:float = NaN;
+    infinite:double = -Infinity;
+    tiny:double = 1e-9;
+    third:float = 0.333333333;
+    hex:uint = 0xFFFFFFFF;
+}

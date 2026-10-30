@@ -1,0 +1,8 @@
+// Included by everything.bufs: definitions from another file and namespace.
+
+namespace test.common;
+
+table Shared {
+    id:uint;
+    label:string;
+}

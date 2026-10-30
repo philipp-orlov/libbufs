@@ -1,0 +1,2 @@
+namespace bad;
+table A { x:int = 1.5; }

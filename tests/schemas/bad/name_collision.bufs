@@ -1,0 +1,2 @@
+namespace bad;
+table A { has_name:bool; name:string; }

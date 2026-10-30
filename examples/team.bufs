@@ -1,0 +1,22 @@
+/// The example schema: a team of people. Every language reads and writes the same bytes.
+namespace examples;
+
+enum Role : ubyte { Guest, Member = 1, Admin }
+
+struct Point { x: float; y: float; }
+
+table Person {
+    name: string;
+    age: uint = 18;               // not stored while it is 18
+    role: Role = Member;
+    home: Point;                  // stored inline
+    emails: [string];
+    scores: [double];
+}
+
+table Team {
+    name: string;
+    people: [Person];
+}
+
+root_type Team;

@@ -1,0 +1,3 @@
+team Compilers (2 people)
+  Ann, 31, Admin, home (1.5, 2.5), emails [ann@example.com, ann@work.example], scores [9.5, 7.25]
+  Bob, 18, Member, home (0, 0), emails [], scores []

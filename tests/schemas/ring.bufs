@@ -1,0 +1,13 @@
+// Messages for the shared-memory transport tests.
+
+namespace test.ring;
+
+table Packet {
+    seq:ulong;
+    payload:[ubyte];
+    note:string;
+}
+
+table Stop {
+    count:ulong;
+}
