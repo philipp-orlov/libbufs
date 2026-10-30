@@ -38,7 +38,8 @@ foreach(case "union_type|unions are not supported" "unknown_type|unknown type 'M
         "vector_of_vectors|vectors of vectors" "struct_with_string|struct fields hold"
         "bad_default|is not an integer" "duplicate_field|duplicate field 'x'"
         "out_of_range|'300' does not fit ubyte" "name_collision|generates the accessor hasName"
-        "float_overflow|does not fit float32")
+        "float_overflow|does not fit float32" "shared_type|only a \\[ubyte\\] or \\[byte\\] field"
+        "shared_struct|struct fields cannot be shared" "shared_stream|stream parameter cannot be")
     string(REPLACE "|" ";" parts "${case}")
     list(GET parts 0 bad)
     list(GET parts 1 expected)
@@ -48,6 +49,7 @@ endforeach()
 
 # rpc_service blocks (compiled by librpc's rpcc) are parsed, checked and otherwise ignored.
 add_test(NAME bufs_accept_rpc_service COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/service.bufs)
+add_test(NAME bufs_accept_shared COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/shared.bufs)
 add_test(NAME bufs_reject_service_type COMMAND bufsc -o ${CMAKE_CURRENT_BINARY_DIR} ${schemas}/bad/service_type.bufs)
 set_tests_properties(bufs_reject_service_type PROPERTIES
     PASS_REGULAR_EXPRESSION "bufsc: .*service_type.bufs:[0-9]+: .*'Color' \\(S.M\\) is not a table")

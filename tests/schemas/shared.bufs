@@ -1,0 +1,11 @@
+namespace shared;
+table Frame {
+    sequence:ulong;
+    pixels:[ubyte] (shared);
+    samples:[byte] (shared, deprecated);
+}
+table Chunk { data:[ubyte] (shared); }
+rpc_service Vision {
+    Recognize(pixels:[ubyte] (shared), width:int, height:int):int;
+    Upload(frames: stream Frame):int;
+}

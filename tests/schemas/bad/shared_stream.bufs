@@ -1,0 +1,2 @@
+namespace bad;
+rpc_service S { Up(data: stream [ubyte] (shared)):int; }

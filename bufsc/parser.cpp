@@ -483,6 +483,8 @@ private:
                                 fail(f.line, "a method has at most one stream parameter");
                             if (isPunct("="))
                                 fail(token_.line, "a stream parameter takes no default");
+                            if (isPunct("("))
+                                fail(token_.line, "a stream parameter cannot be (shared); mark a field of its item table");
                             m.inputStream = true;
                             m.input = std::move(f);
                             if (isPunct(",")) {
@@ -503,6 +505,8 @@ private:
                             f.defaultText = token_.text;
                             advance();
                         }
+                        if (isPunct("("))
+                            parseFieldAttributes(f, true, true);
                         for (const Field& other : m.params)
                             if (other.name == f.name)
                                 fail(f.line, "duplicate parameter '" + f.name + "'");
@@ -608,6 +612,35 @@ private:
         add(schema_.tables, std::move(def));
     }
 
+    // `( deprecated, shared )` after a field's type. `parameter`: a natural-form service parameter, which takes
+    // `shared` only.
+    void parseFieldAttributes(Field& f, bool inTable, bool parameter) {
+        advance();  // the '('
+        while (!isPunct(")")) {
+            const Token attribute = expect(Token::Ident, "an attribute");
+            if (attribute.text == "deprecated") {
+                if (parameter)
+                    fail(attribute.line, "a parameter cannot be deprecated");
+                if (!inTable)
+                    fail(attribute.line, "struct fields cannot be deprecated");
+                f.deprecated = true;
+            } else if (attribute.text == "shared") {
+                if (!inTable)
+                    fail(attribute.line, "struct fields cannot be shared");
+                if (!f.type.vector || (f.type.base != Base::UInt8 && f.type.base != Base::Int8))
+                    fail(attribute.line, "only a [ubyte] or [byte] field can be (shared)");
+                f.shared = true;
+            }
+            if (isPunct(":")) {
+                advance();
+                advance();
+            }
+            if (isPunct(","))
+                advance();
+        }
+        advance();
+    }
+
     Field parseField(bool inTable) {
         Field f;
         f.doc = lexer_->takeDoc();
@@ -625,24 +658,8 @@ private:
             f.defaultText = token_.text;
             advance();
         }
-        if (isPunct("(")) {
-            advance();
-            while (!isPunct(")")) {
-                const Token attribute = expect(Token::Ident, "an attribute");
-                if (attribute.text == "deprecated") {
-                    if (!inTable)
-                        fail(attribute.line, "struct fields cannot be deprecated");
-                    f.deprecated = true;
-                }
-                if (isPunct(":")) {
-                    advance();
-                    advance();
-                }
-                if (isPunct(","))
-                    advance();
-            }
-            advance();
-        }
+        if (isPunct("("))
+            parseFieldAttributes(f, inTable, false);
         expectPunct(";");
         return f;
     }

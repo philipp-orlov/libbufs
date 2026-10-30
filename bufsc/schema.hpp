@@ -58,6 +58,9 @@ struct Field {
     Type type;
     std::string defaultText; // as written; empty for none
     bool deprecated = false;
+    // `(shared)` on a [ubyte] / [byte] table field: bulk bytes that librpc may hand over in shared memory instead of
+    // copying them (see librpc). The field is an ordinary vector to every generator here.
+    bool shared = false;
     std::vector<std::string> doc;
     int line = 0;
 
