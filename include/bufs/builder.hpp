@@ -116,8 +116,12 @@ public:
         // Remembered only up to the small-block limit: one outlier must not
         // make every later message of its type start with a huge block.
         const uint32_t remembered = static_cast<uint32_t>(std::min<size_t>(end, BufferPool::kMaxSmallBytes));
-        if (hint_ && hint_->load(std::memory_order_relaxed) < remembered)
-            hint_->store(remembered, std::memory_order_relaxed);
+        // A maximum: a smaller message finishing later on another thread must not overwrite a larger one's.
+        if (hint_) {
+            uint32_t seen = hint_->load(std::memory_order_relaxed);
+            while (seen < remembered && !hint_->compare_exchange_weak(seen, remembered, std::memory_order_relaxed)) {
+            }
+        }
         return {data_, end};
     }
 

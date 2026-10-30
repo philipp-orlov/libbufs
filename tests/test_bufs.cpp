@@ -420,6 +420,34 @@ void poolThreads() {
     CHECK(s.retainedBytes <= (size_t{64} << 20));
 }
 
+// The remembered size of a root type only ever grows, however builders finish concurrently.
+void sizeHintNeverShrinks() {
+    std::atomic<uint32_t>& hint = bufs::detail::sizeHint<ev::Everything>();
+    std::atomic<uint32_t> largest{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t)
+        threads.emplace_back([&, t] {
+            bufs::BufferPool pool;
+            for (int i = 0; i < 4000; ++i) {
+                bufs::MessageBuilder mb(pool);
+                ev::Everything::Builder e = mb.initRoot<ev::Everything>();
+                // even threads build the big messages, odd ones the small
+                e.initBytes(t % 2 ? 100 : 20000);
+                const uint32_t size = static_cast<uint32_t>(mb.finish().second);
+                uint32_t seen = largest.load();
+                while (seen < size && !largest.compare_exchange_weak(seen, size)) {
+                }
+                const uint32_t before = hint.load();
+                CHECK(before <= bufs::BufferPool::kMaxSmallBytes);
+                (void)mb.release();
+                CHECK(hint.load() >= std::min<uint32_t>(before, bufs::BufferPool::kMaxSmallBytes));
+            }
+        });
+    for (std::thread& t : threads)
+        t.join();
+    CHECK(hint.load() >= std::min<uint32_t>(largest.load(), bufs::BufferPool::kMaxSmallBytes));
+}
+
 // An idle outlier block keeps its pages while it may be reused soon and gives
 // them back once it has been idle for releasePagesAfter.
 size_t residentPages(const uint8_t* p, size_t bytes) {
@@ -634,6 +662,7 @@ int main() {
     trickyNames();
     verifierBudget();
     poolThreads();
+    sizeHintNeverShrinks();
     idlePagesReleased();
     noHeapAfterWarmUp();
     messageStreams();
