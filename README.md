@@ -19,7 +19,7 @@ long-running service, and fine with large payloads too.
 
 `telemetry.bufs`, a weather station sending batches of sensor readings:
 
-```protobuf
+```cpp
 namespace demo;
 
 enum Unit : ubyte { None, Celsius, Pascal, Percent }
