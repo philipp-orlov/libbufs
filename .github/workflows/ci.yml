@@ -15,7 +15,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release  
+          cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DBUFS_BUILD_FUZZ=ON -DCMAKE_BUILD_TYPE=Release  
       - name: Build
         run: cmake --build build
       - name: Test
@@ -29,7 +29,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug  "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DBUFS_BUILD_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug  "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
       - name: Build
         run: cmake --build build
       - name: Test
@@ -46,7 +46,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer"
+          cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DBUFS_BUILD_FUZZ=ON -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer"
       - name: Build
         run: cmake --build build
       - name: Test

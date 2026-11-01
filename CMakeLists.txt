@@ -19,6 +19,7 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 option(BUFS_BUILD_TESTS "Build the libbufs tests" ON)
+option(BUFS_BUILD_FUZZ "Build the fuzz targets (fuzz/)" OFF)
 option(BUFS_BUILD_BENCHMARKS "Build the libbufs benchmarks (see benchmarks/)" OFF)
 
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
@@ -130,4 +131,23 @@ endif()
 
 if(BUFS_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
+endif()
+
+# Fuzz targets (fuzz/): libFuzzer executables with Clang, otherwise a small mutation driver that doubles as a ctest
+# smoke test (and finds what libFuzzer would in its first minutes under -fsanitize=address,undefined).
+if(BUFS_BUILD_FUZZ)
+    add_executable(fuzz_verify fuzz/fuzz_verify.cpp)
+    bufs_generate(fuzz_verify SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/tests/schemas/everything.bufs
+                  ${CMAKE_CURRENT_SOURCE_DIR}/tests/schemas/common.bufs
+                  INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/tests/schemas)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(fuzz_verify PRIVATE -fsanitize=fuzzer,address,undefined)
+        target_link_options(fuzz_verify PRIVATE -fsanitize=fuzzer,address,undefined)
+    else()
+        target_sources(fuzz_verify PRIVATE fuzz/fuzz_driver.cpp)
+        if(BUILD_TESTING)
+            add_test(NAME bufs_fuzz_verify COMMAND fuzz_verify --iterations=20000 --seed=1)
+            set_tests_properties(bufs_fuzz_verify PROPERTIES TIMEOUT 300)
+        endif()
+    endif()
 endif()
