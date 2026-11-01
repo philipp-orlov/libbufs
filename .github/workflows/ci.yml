@@ -1,0 +1,55 @@
+# Release, address+undefined and thread sanitizer builds on every push and pull request.
+# Dependencies that live in other repositories are checked out next to the sources and passed by path.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release  
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j2 --timeout 300
+
+  asan-ubsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug  "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure -j2 --timeout 300
+
+  tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build --output-on-failure -j2 --timeout 300
