@@ -52,6 +52,7 @@
 #include "base/status.hpp"
 #include "bufs/fd.hpp"
 #include "sys/shm.hpp"
+#include "sys/vm.hpp"
 #include "sys/wait.hpp"
 #include "bufs/format.hpp"
 
@@ -574,6 +575,10 @@ public:
     const std::string& name() const { return region_.name(); }
     // An anonymous channel's descriptor; -1 for a named one.
     int fd() const { return region_.fd(); }
+    // Faults every page of this side's mapping in now (MADV_POPULATE_WRITE, or a read per page): the rings then
+    // take no page fault when the write position first laps them, and resident memory is flat from the start.
+    // Safe while the other side is already using the channel. Call once on each side that maps it.
+    void prefault() { sys::vmPrefault(region_.data(), region_.size()); }
     explicit operator bool() const { return static_cast<bool>(region_); }
 
 private:
