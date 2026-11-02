@@ -36,6 +36,9 @@
 #include <new>
 #include <utility>
 
+#include "mem/size_class_pool.hpp"
+#include "sys/vm.hpp"
+
 namespace bufs {
 
 class BufferPool;
@@ -73,6 +76,9 @@ private:
     size_t capacity_ = 0;
 };
 
+// The pool itself is develop-core's mem::SizeClassPool (sharded slabs with per-thread caches for the small classes,
+// per-block mappings with idle-page release for the large ones, misuse detection, an off-heap bookkeeping); this class
+// keeps libbufs's interface and its one extra behaviour, blocks above the largest class mapped per use.
 class BufferPool {
 public:
     struct Options {
@@ -80,10 +86,9 @@ public:
         size_t maxRetainedLargeBytes = size_t{64} << 20;
         // Idle blocks kept per large class.
         size_t maxRetainedPerLargeClass = 16;
-        // An idle large block that stays unused this long gives its pages back
-        // (MADV_DONTNEED) and keeps only its address range: while outliers keep
-        // coming their blocks stay warm, and once they stop the memory returns
-        // to the OS. Checked on large-block traffic and every 4096 releases.
+        // An idle large block that stays unused this long gives its pages back (MADV_DONTNEED) and keeps only its
+        // address range: while outliers keep coming their blocks stay warm, and once they stop the memory returns
+        // to the OS. Checked on large-block releases, at most every 50 ms.
         std::chrono::milliseconds releasePagesAfter{250};
         // Size of one slab for the small classes.
         size_t slabBytes = size_t{256} << 10;
@@ -102,31 +107,7 @@ public:
     static constexpr size_t kMaxClassBytes = size_t{64} << 20;
 
     BufferPool() : BufferPool(Options{}) {}
-    explicit BufferPool(Options options) : options_(options) {
-        options_.slabBytes = std::max(options_.slabBytes, kMaxSmallBytes);
-        for (int i = 0; i < kClasses; ++i) {
-            classes_[static_cast<size_t>(i)].bytes = size_t{1} << (i + kMinShift);
-            classes_[static_cast<size_t>(i)].small = classes_[static_cast<size_t>(i)].bytes <= kMaxSmallBytes;
-        }
-    }
-    ~BufferPool() {
-        for (Class& c : classes_) {
-            if (c.small)
-                continue;
-            for (Shard& shard : c.shards)
-                for (FreeBlock* b = shard.free; b;) {
-                    FreeBlock* next = b->next;
-                    ::munmap(b, c.bytes);
-                    b = next;
-                }
-        }
-        for (Slab* s = slabs_; s;) {
-            Slab* next = s->next;
-            ::munmap(s->memory, s->bytes);
-            delete s;
-            s = next;
-        }
-    }
+    explicit BufferPool(Options options) : pool_(convert(options)) {}
     BufferPool(const BufferPool&) = delete;
     BufferPool& operator=(const BufferPool&) = delete;
 
@@ -136,333 +117,75 @@ public:
         return *pool;
     }
 
-    // A block of at least `minBytes`, 64-byte aligned. Its contents are
-    // whatever the previous user left. Throws std::bad_alloc when the OS
-    // refuses the memory.
+    // A block of at least `minBytes`, 64-byte aligned. Its contents are whatever the previous user left. Throws
+    // std::bad_alloc when the OS refuses the memory.
     Buffer acquire(size_t minBytes) {
         const size_t want = std::max(minBytes, kMinClassBytes);
         if (want > kMaxClassBytes) {
-            const size_t bytes = roundUp(want, kPage);
-            uint8_t* p = map(bytes);
+            const sys::VmRegion r = sys::tryVmMap(want);
+            if (!r.base)
+                throw std::bad_alloc();
             hugeInUse_.fetch_add(1, std::memory_order_relaxed);
-            return Buffer(this, p, bytes);
+            hugeMapped_.fetch_add(r.bytes, std::memory_order_relaxed);
+            hugeCalls_.fetch_add(1, std::memory_order_relaxed);
+            return Buffer(this, static_cast<uint8_t*>(r.base), r.bytes);
         }
-        Class& c = classes_[static_cast<size_t>(classIndex(want))];
-        Shard& own = c.shards[shardOfThisThread()];
-        uint8_t* p = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(own.mutex);
-            p = pop(own);
-            if (p)
-                bump(own.inUse, 1);
-        }
-        if (!p)
-            p = steal(c, own);
-        if (p) {
-            if (!c.small) {
-                unretain(c);
-                releaseIdlePages(nowNs());
-            }
-            return Buffer(this, p, c.bytes);
-        }
-        if (c.small) {
-            std::lock_guard<std::mutex> lock(c.carveMutex);
-            p = carve(c);
-        } else {
-            p = map(c.bytes);
-        }
-        std::lock_guard<std::mutex> lock(own.mutex);
-        bump(own.inUse, 1);
-        return Buffer(this, p, c.bytes);
+        const mem::SizeClassPool::Block b = pool_.acquire(want);
+        return Buffer(this, static_cast<uint8_t*>(b.data), b.capacity);
     }
 
     // Returns a block taken from acquire(). Prefer letting the Buffer do it.
     void release(uint8_t* data, size_t capacity) noexcept {
         if (capacity > kMaxClassBytes) {
             hugeInUse_.fetch_sub(1, std::memory_order_relaxed);
-            unmap(data, capacity);
+            hugeMapped_.fetch_sub(capacity, std::memory_order_relaxed);
+            hugeUnmaps_.fetch_add(1, std::memory_order_relaxed);
+            sys::vmUnmap(data, capacity);
             return;
         }
-        Class& c = classes_[static_cast<size_t>(classIndex(capacity))];
-        Shard& own = c.shards[shardOfThisThread()];
-        if (!c.small) {
-            const int64_t now = nowNs();
-            if (!retain(c)) {
-                unmap(data, c.bytes);
-                std::lock_guard<std::mutex> lock(own.mutex);
-                bump(own.inUse, -1);
-            } else {
-                FreeBlock* b = reinterpret_cast<FreeBlock*>(data);
-                b->idleSinceNs = now;
-                b->pagesReleased = false;
-                std::lock_guard<std::mutex> lock(own.mutex);
-                push(own, data);
-                bump(own.inUse, -1);
-            }
-            releaseIdlePages(now);
-            return;
-        }
-        bool check = false;
-        {
-            std::lock_guard<std::mutex> lock(own.mutex);
-            push(own, data);
-            bump(own.inUse, -1);
-            check = (++own.releases & 4095) == 0;
-        }
-        if (check && retainedBytes_.load(std::memory_order_relaxed) > 0)
-            releaseIdlePages(nowNs());
+        pool_.release({data, capacity});
     }
 
     // Unmaps every idle large block. Small-class slabs stay mapped.
-    void trim() noexcept {
-        for (Class& c : classes_) {
-            if (c.small)
-                continue;
-            for (Shard& shard : c.shards) {
-                FreeBlock* list = nullptr;
-                {
-                    std::lock_guard<std::mutex> lock(shard.mutex);
-                    list = std::exchange(shard.free, nullptr);
-                    shard.idle.store(0, std::memory_order_relaxed);
-                }
-                while (list) {
-                    FreeBlock* next = list->next;
-                    c.retained.fetch_sub(1, std::memory_order_relaxed);
-                    retainedBytes_.fetch_sub(c.bytes, std::memory_order_relaxed);
-                    unmap(reinterpret_cast<uint8_t*>(list), c.bytes);
-                    list = next;
-                }
-            }
-        }
-    }
+    void trim() noexcept { pool_.releaseIdleLarge(); }
 
     Stats stats() const {
-        Stats s;
-        s.mappedBytes = mappedBytes_.load(std::memory_order_relaxed);
-        s.retainedBytes = retainedBytes_.load(std::memory_order_relaxed);
-        int64_t inUse = static_cast<int64_t>(hugeInUse_.load(std::memory_order_relaxed));
-        for (const Class& c : classes_)
-            for (const Shard& shard : c.shards)
-                inUse += shard.inUse.load(std::memory_order_relaxed);
-        s.blocksInUse = static_cast<size_t>(inUse);
-        s.mapCalls = mapCalls_.load(std::memory_order_relaxed);
-        s.unmapCalls = unmapCalls_.load(std::memory_order_relaxed);
-        return s;
+        const mem::Stats s = pool_.stats();
+        Stats out;
+        out.mappedBytes = static_cast<size_t>(s.mappedBytes) + hugeMapped_.load(std::memory_order_relaxed);
+        out.retainedBytes = static_cast<size_t>(pool_.idleLargeBytes());
+        out.blocksInUse = static_cast<size_t>(s.blocksInUse) + hugeInUse_.load(std::memory_order_relaxed);
+        out.mapCalls = s.mapCalls + hugeCalls_.load(std::memory_order_relaxed);
+        out.unmapCalls = s.unmapCalls + hugeUnmaps_.load(std::memory_order_relaxed);
+        return out;
     }
 
     // The capacity acquire(bytes) hands out.
     static size_t classBytes(size_t bytes) {
         const size_t want = std::max(bytes, kMinClassBytes);
-        return want > kMaxClassBytes ? roundUp(want, kPage) : size_t{1} << (classIndex(want) + kMinShift);
+        if (want > kMaxClassBytes)
+            return (want + 4095) / 4096 * 4096;
+        size_t c = kMinClassBytes;
+        while (c < want)
+            c <<= 1;
+        return c;
     }
 
 private:
-    static constexpr size_t kPage = 4096;
-    static constexpr int kMinShift = 8; // 256 B
-    static constexpr int kClasses = 19; // 256 B .. 64 MiB
-    // Each class is split into shards, one per thread round robin, so threads
-    // do not share a lock or a cache line. A shard that runs dry takes a batch
-    // from another: with one thread building and another freeing, blocks move
-    // kStealBatch at a time, not one by one.
-    static constexpr size_t kShards = 16;
-    static constexpr size_t kStealBatch = 32;
-
-    struct FreeBlock {
-        FreeBlock* next;
-        int64_t idleSinceNs; // large classes only
-        bool pagesReleased;  // large classes only
-    };
-    struct Slab {
-        uint8_t* memory;
-        size_t bytes;
-        Slab* next;
-    };
-    struct alignas(64) Shard {
-        std::mutex mutex;
-        FreeBlock* free = nullptr;
-        std::atomic<size_t> idle{0}; // blocks on `free`; read without the lock as a hint
-        std::atomic<int64_t> inUse{0}; // acquired here less released here; summed by stats()
-        uint32_t releases = 0;         // drives the periodic idle-page check
-    };
-    struct Class {
-        std::array<Shard, kShards> shards;
-        std::mutex carveMutex;
-        uint8_t* cursor = nullptr; // next uncarved block of the newest slab
-        uint8_t* limit = nullptr;
-        std::atomic<size_t> retained{0}; // idle large blocks of this class
-        size_t bytes = 0;
-        bool small = false;
-    };
-
-    static size_t roundUp(size_t value, size_t to) { return (value + to - 1) / to * to; }
-
-    static int classIndex(size_t bytes) {
-        int shift = kMinShift;
-        while ((size_t{1} << shift) < bytes)
-            ++shift;
-        return shift - kMinShift;
-    }
-
-    static size_t shardOfThisThread() {
-        static std::atomic<size_t> next{0};
-        thread_local const size_t mine = next.fetch_add(1, std::memory_order_relaxed) % kShards;
-        return mine;
-    }
-
-    // A shard's counters change only under its lock, so a plain load and
-    // store does; they are atomic so stats() and steal() can read them
-    // without the lock.
-    template <class T>
-    static void bump(std::atomic<T>& counter, int64_t by) {
-        counter.store(static_cast<T>(static_cast<int64_t>(counter.load(std::memory_order_relaxed)) + by),
-                      std::memory_order_relaxed);
-    }
-
-    // Called with the shard locked.
-    static uint8_t* pop(Shard& shard) {
-        FreeBlock* b = shard.free;
-        if (!b)
-            return nullptr;
-        shard.free = b->next;
-        bump(shard.idle, -1);
-        return reinterpret_cast<uint8_t*>(b);
-    }
-
-    static void push(Shard& shard, uint8_t* data) {
-        FreeBlock* b = reinterpret_cast<FreeBlock*>(data);
-        b->next = shard.free;
-        shard.free = b;
-        bump(shard.idle, 1);
-    }
-
-    // Takes up to kStealBatch idle blocks from another shard: one for the
-    // caller, the rest into `own`.
-    static uint8_t* steal(Class& c, Shard& own) {
-        const size_t start = static_cast<size_t>(&own - c.shards.data());
-        for (size_t i = 1; i < kShards; ++i) {
-            Shard& other = c.shards[(start + i) % kShards];
-            if (other.idle.load(std::memory_order_relaxed) == 0)
-                continue;
-            FreeBlock* first = nullptr;
-            FreeBlock* last = nullptr;
-            size_t taken = 0;
-            {
-                std::lock_guard<std::mutex> lock(other.mutex);
-                first = other.free;
-                for (FreeBlock* b = first; b && taken < kStealBatch; b = b->next) {
-                    last = b;
-                    ++taken;
-                }
-                if (!taken)
-                    continue;
-                other.free = last->next;
-                bump(other.idle, -static_cast<int64_t>(taken));
-            }
-            std::lock_guard<std::mutex> lock(own.mutex);
-            if (taken > 1) {
-                last->next = own.free;
-                own.free = first->next;
-                bump(own.idle, static_cast<int64_t>(taken) - 1);
-            }
-            bump(own.inUse, 1);
-            return reinterpret_cast<uint8_t*>(first);
-        }
-        return nullptr;
-    }
-
-    // Whether an idle large block is kept: within the per-class and total limits.
-    bool retain(Class& c) noexcept {
-        if (c.retained.fetch_add(1, std::memory_order_relaxed) >= options_.maxRetainedPerLargeClass) {
-            c.retained.fetch_sub(1, std::memory_order_relaxed);
-            return false;
-        }
-        if (retainedBytes_.fetch_add(c.bytes, std::memory_order_relaxed) + c.bytes > options_.maxRetainedLargeBytes) {
-            retainedBytes_.fetch_sub(c.bytes, std::memory_order_relaxed);
-            c.retained.fetch_sub(1, std::memory_order_relaxed);
-            return false;
-        }
-        return true;
-    }
-
-    // A retained large block is in use again.
-    void unretain(Class& c) noexcept {
-        c.retained.fetch_sub(1, std::memory_order_relaxed);
-        retainedBytes_.fetch_sub(c.bytes, std::memory_order_relaxed);
-    }
-
-    static int64_t nowNs() {
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    }
-
-    // Gives back the pages of every large block idle for releasePagesAfter.
-    // The first page stays: it holds the free-list link.
-    void releaseIdlePages(int64_t now) noexcept {
-        const int64_t after = std::chrono::duration_cast<std::chrono::nanoseconds>(options_.releasePagesAfter).count();
-        int64_t expected = lastIdleCheckNs_.load(std::memory_order_relaxed);
-        if (now - expected < after / 4 ||
-            !lastIdleCheckNs_.compare_exchange_strong(expected, now, std::memory_order_relaxed))
-            return;
-        for (Class& c : classes_) {
-            if (c.small || c.retained.load(std::memory_order_relaxed) == 0)
-                continue;
-            for (Shard& shard : c.shards) {
-                if (shard.idle.load(std::memory_order_relaxed) == 0)
-                    continue;
-                std::lock_guard<std::mutex> lock(shard.mutex);
-                for (FreeBlock* b = shard.free; b; b = b->next) {
-                    if (b->pagesReleased || now - b->idleSinceNs < after)
-                        continue;
-                    ::madvise(reinterpret_cast<uint8_t*>(b) + kPage, c.bytes - kPage, MADV_DONTNEED);
-                    b->pagesReleased = true;
-                }
-            }
-        }
-    }
-
-    uint8_t* map(size_t bytes) {
-        void* p = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED)
-            throw std::bad_alloc();
-        mapCalls_.fetch_add(1, std::memory_order_relaxed);
-        mappedBytes_.fetch_add(bytes, std::memory_order_relaxed);
-        return static_cast<uint8_t*>(p);
-    }
-
-    void unmap(uint8_t* p, size_t bytes) noexcept {
-        ::munmap(p, bytes);
-        unmapCalls_.fetch_add(1, std::memory_order_relaxed);
-        mappedBytes_.fetch_sub(bytes, std::memory_order_relaxed);
-    }
-
-    // Called with c.carveMutex held.
-    uint8_t* carve(Class& c) {
-        if (c.cursor == c.limit) {
-            const size_t bytes = options_.slabBytes;
-            uint8_t* memory = map(bytes);
-            {
-                std::lock_guard<std::mutex> lock(slabsMutex_);
-                slabs_ = new Slab{memory, bytes, slabs_};
-            }
-            c.cursor = memory;
-            c.limit = memory + bytes / c.bytes * c.bytes;
-        }
-        uint8_t* p = c.cursor;
-        c.cursor += c.bytes;
+    static mem::PoolOptions convert(const Options& o) {
+        mem::PoolOptions p;
+        p.classes = mem::ClassTable::pow2(kMinClassBytes, kMaxClassBytes);
+        p.smallLimit = kMaxSmallBytes;
+        p.slabBytes = std::max(o.slabBytes, kMaxSmallBytes);
+        p.retainLargeBytes = o.maxRetainedLargeBytes;
+        p.maxIdlePerLargeClass = o.maxRetainedPerLargeClass;
+        p.releaseIdleAfter = o.releasePagesAfter;
+        p.hooks.abortOnMisuse = false;
         return p;
     }
-
-    Options options_;
-    std::array<Class, kClasses> classes_;
-    std::mutex slabsMutex_;
-    Slab* slabs_ = nullptr;
-    std::atomic<size_t> mappedBytes_{0};
-    std::atomic<size_t> retainedBytes_{0};
-    std::atomic<size_t> hugeInUse_{0};
-    std::atomic<int64_t> lastIdleCheckNs_{0};
-    std::atomic<uint64_t> mapCalls_{0};
-    std::atomic<uint64_t> unmapCalls_{0};
+    mem::SizeClassPool pool_;
+    std::atomic<size_t> hugeInUse_{0}, hugeMapped_{0};
+    std::atomic<uint64_t> hugeCalls_{0}, hugeUnmaps_{0};
 };
 
 inline void Buffer::reset() noexcept {

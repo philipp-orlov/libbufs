@@ -35,7 +35,7 @@ if(NOT TARGET develop::schema)
 endif()
 add_library(bufs INTERFACE)
 # Shared memory, descriptors and futex waits come from develop-core's libsys.
-target_link_libraries(bufs INTERFACE $<BUILD_INTERFACE:develop::sys>)
+target_link_libraries(bufs INTERFACE $<BUILD_INTERFACE:develop::mem> $<BUILD_INTERFACE:develop::sys>)
 add_library(bufs::bufs ALIAS bufs)
 target_include_directories(bufs INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(bufs INTERFACE cxx_std_17)
