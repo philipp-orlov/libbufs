@@ -39,8 +39,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
-# The schema compiler.
-add_executable(bufsc bufsc/main.cpp bufsc/parser.cpp bufsc/generate_cpp.cpp bufsc/check.cpp bufsc/generators.cpp bufsc/gen_ts.cpp bufsc/gen_cs.cpp bufsc/gen_py.cpp)
+# The schema compiler. Its front end (parser, checker, schema model) is develop-core's libschema: a sibling checkout by
+# default, ignored when the including project already provides the target.
+set(BUFS_DEVELOP_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../develop-core" CACHE PATH "Path to a develop-core checkout")
+if(NOT TARGET develop::schema)
+    set(DEVELOP_BUILD_TESTS OFF CACHE BOOL "")
+    add_subdirectory("${BUFS_DEVELOP_CORE_DIR}" develop-core)
+endif()
+add_executable(bufsc bufsc/main.cpp bufsc/generate_cpp.cpp bufsc/generators.cpp bufsc/gen_ts.cpp bufsc/gen_cs.cpp bufsc/gen_py.cpp)
+target_link_libraries(bufsc PRIVATE develop::schema)
 target_compile_options(bufsc PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>)
 if(NOT CMAKE_CROSSCOMPILING)
     add_executable(bufs::bufsc ALIAS bufsc)
