@@ -49,7 +49,10 @@
 #include <system_error>
 #include <utility>
 
+#include "base/status.hpp"
 #include "bufs/fd.hpp"
+#include "sys/shm.hpp"
+#include "sys/wait.hpp"
 #include "bufs/format.hpp"
 
 namespace bufs::shm {
@@ -65,20 +68,10 @@ static_assert(std::atomic<uint32_t>::is_always_lock_free && std::atomic<uint64_t
               "shared-memory rings need lock-free atomics");
 
 inline void futexWait(std::atomic<uint32_t>* word, uint32_t expected, std::chrono::nanoseconds timeout) {
-    timespec ts{};
-    timespec* pts = nullptr;
-    if (timeout.count() >= 0) {
-        ts.tv_sec = static_cast<time_t>(timeout.count() / 1000000000);
-        ts.tv_nsec = static_cast<long>(timeout.count() % 1000000000);
-        pts = &ts;
-    }
-    // Not FUTEX_PRIVATE: the word lives in memory other processes map.
-    ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAIT, expected, pts, nullptr, 0);
+    sys::waitOnAddress(*word, expected, timeout);   // not process-private: the word lives in memory peers map
 }
 
-inline void futexWake(std::atomic<uint32_t>* word) {
-    ::syscall(SYS_futex, reinterpret_cast<uint32_t*>(word), FUTEX_WAKE, INT_MAX, nullptr, nullptr, 0);
-}
+inline void futexWake(std::atomic<uint32_t>* word) { sys::wakeAll(*word); }
 
 // now() + timeout, clamped to the clock's maximum so a huge timeout cannot
 // overflow into the past.
@@ -120,89 +113,53 @@ bool spinFor(std::chrono::nanoseconds spin, Ready ready) {
 
 // `bytes` of anonymous shared memory, zeroed, mapped read-write. Created here
 // (create) or received from another process (adopt). The descriptor stays
-// open, so it can be passed on with bufs::local::Socket.
+// open, so it can be passed on with bufs::local::Socket. The work is done by
+// sys::SharedMemory (develop-core); this class keeps the exception types
+// bufs has always thrown (std::system_error, std::invalid_argument).
 class Memory {
 public:
     // The seals every Memory carries. adopt() requires SHRINK and GROW.
     static constexpr int kSeals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL;
 
     Memory() = default;
-    ~Memory() { unmap(); }
-    Memory(Memory&& other) noexcept
-        : fd_(std::move(other.fd_)), data_(std::exchange(other.data_, nullptr)),
-          size_(std::exchange(other.size_, 0)) {}
-    Memory& operator=(Memory&& other) noexcept {
-        if (this != &other) {
-            unmap();
-            fd_ = std::move(other.fd_);
-            data_ = std::exchange(other.data_, nullptr);
-            size_ = std::exchange(other.size_, 0);
-        }
-        return *this;
-    }
+    Memory(Memory&&) noexcept = default;
+    Memory& operator=(Memory&&) noexcept = default;
     Memory(const Memory&) = delete;
     Memory& operator=(const Memory&) = delete;
 
     // `name` only labels the file in /proc/<pid>/fd and maps.
     static Memory create(const char* name, size_t bytes) {
-        if (bytes == 0)
-            throw std::invalid_argument("bufs: empty shared memory");
-        Fd fd(::memfd_create(name, MFD_CLOEXEC | MFD_ALLOW_SEALING));
-        if (!fd)
-            throw std::system_error(errno, std::generic_category(), "memfd_create");
-        if (::ftruncate(fd.get(), static_cast<off_t>(bytes)) != 0)
-            throw std::system_error(errno, std::generic_category(), "ftruncate");
-        if (::fcntl(fd.get(), F_ADD_SEALS, kSeals) != 0)
-            throw std::system_error(errno, std::generic_category(), "F_ADD_SEALS");
-        return map(std::move(fd), bytes);
+        return Memory(translate([&] { return sys::SharedMemory::create(name, bytes); }));
     }
 
     // Maps memory another process created with create() (or sealed the same
     // way). Refuses anything else: an unsealed file could be shrunk under the
     // mapping. `maxBytes` bounds what a peer can make this process map.
     static Memory adopt(Fd fd, size_t maxBytes = size_t{1} << 32) {
-        if (!fd)
-            throw std::invalid_argument("bufs: no descriptor");
-        const int seals = ::fcntl(fd.get(), F_GET_SEALS);
-        if (seals < 0 || (seals & (F_SEAL_SHRINK | F_SEAL_GROW)) != (F_SEAL_SHRINK | F_SEAL_GROW))
-            throw std::invalid_argument("bufs: shared memory is not sealed against resizing");
-        struct stat st {};
-        if (::fstat(fd.get(), &st) != 0 || st.st_size <= 0)
-            throw std::invalid_argument("bufs: shared memory has no size");
-        const size_t bytes = static_cast<size_t>(st.st_size);
-        if (bytes > maxBytes)
-            throw std::invalid_argument("bufs: shared memory is larger than allowed");
-        return map(std::move(fd), bytes);
+        return Memory(translate([&] { return sys::SharedMemory::adopt(std::move(fd), maxBytes); }));
     }
 
-    uint8_t* data() const { return data_; }
-    size_t size() const { return size_; }
-    int fd() const { return fd_.get(); }
-    explicit operator bool() const { return data_ != nullptr; }
+    uint8_t* data() const { return shm_.data(); }
+    size_t size() const { return shm_.size(); }
+    int fd() const { return shm_.fd(); }
+    explicit operator bool() const { return static_cast<bool>(shm_); }
 
 private:
-    static Memory map(Fd fd, size_t bytes) {
-        void* p = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd.get(), 0);
-        if (p == MAP_FAILED)
-            throw std::system_error(errno, std::generic_category(), "mmap");
-        Memory memory;
-        memory.fd_ = std::move(fd);
-        memory.data_ = static_cast<uint8_t*>(p);
-        memory.size_ = bytes;
-        return memory;
+    explicit Memory(sys::SharedMemory shm) : shm_(std::move(shm)) {}
+
+    template <class F>
+    static sys::SharedMemory translate(F&& f) {
+        try {
+            return f();
+        } catch (const base::Error& e) {
+            const uint32_t err = e.status().detail();
+            if (err != 0)
+                throw std::system_error(static_cast<int>(err), std::generic_category(), std::string(e.status().message()));
+            throw std::invalid_argument("bufs: " + std::string(e.status().message()));
+        }
     }
 
-    void unmap() noexcept {
-        if (data_)
-            ::munmap(data_, size_);
-        data_ = nullptr;
-        size_ = 0;
-        fd_.reset();
-    }
-
-    Fd fd_;
-    uint8_t* data_ = nullptr;
-    size_t size_ = 0;
+    sys::SharedMemory shm_;
 };
 
 // ------------------------------------------------------------------ Region --
