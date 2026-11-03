@@ -10,7 +10,10 @@
 # messages for TypeScript (<stem>.bufs.ts), C# (<stem>.bufs.cs) and Python
 # (<stem>_bufs.py) next to it; their runtimes are in ts/, cs/ and python/.
 
-cmake_minimum_required(VERSION 3.16)
+# The range turns on the newer policies where CMake has them: CMP0116, for the
+# DEPFILEs of the generators (the paths in them are absolute, so either reading
+# agrees).
+cmake_minimum_required(VERSION 3.16...3.28)
 project(libbufs LANGUAGES CXX)
 
 if(NOT CMAKE_CXX_STANDARD)

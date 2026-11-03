@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     const Team::Reader team = bufs::root<Team>(bytes.data());  // reads in place: nothing is copied
-    std::printf("team %.*s (%zu people)\n", static_cast<int>(team.name().size()), team.name().data(), team.people().size());
+    std::printf("team %.*s (%u people)\n", static_cast<int>(team.name().size()), team.name().data(), static_cast<unsigned>(team.people().size()));
     for (const Person::Reader person : team.people()) {
         std::printf("  %.*s, %u, %s, home (%g, %g)", static_cast<int>(person.name().size()), person.name().data(), person.age(),
                     roleName(person.role()), person.home().x, person.home().y);
