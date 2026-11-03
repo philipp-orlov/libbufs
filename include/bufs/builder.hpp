@@ -186,7 +186,9 @@ public:
 
     uint32_t createString(std::string_view text) {
         const uint32_t at = allocateVector(text.size() + 1, 1, 1, false);
-        std::memcpy(data_ + at + 4, text.data(), text.size());
+        // An empty string_view may have a null data(): memcpy from null is undefined even for 0 bytes.
+        if (!text.empty())
+            std::memcpy(data_ + at + 4, text.data(), text.size());
         data_[at + 4 + text.size()] = 0;
         store<uint32_t>(data_ + at, static_cast<uint32_t>(text.size()));
         return at;
@@ -223,7 +225,8 @@ private:
         if (!pool_ || needed > kMaxMessageBytes)
             throw CapacityError(pool_ ? "bufs: message larger than 4 GiB" : "bufs: message does not fit its buffer");
         Buffer bigger = pool_->acquire(std::max(needed, capacity_ * 2));
-        std::memcpy(bigger.data(), data_, used_);
+        if (used_)  // a builder that has not started holds no block yet (data_ is null)
+            std::memcpy(bigger.data(), data_, used_);
         buffer_ = std::move(bigger);
         data_ = buffer_.data();
         capacity_ = std::min(buffer_.capacity(), kMaxMessageBytes);
