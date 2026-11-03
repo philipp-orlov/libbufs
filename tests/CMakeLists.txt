@@ -68,4 +68,4 @@ add_test(NAME bufs_languages
                  -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/.. -DWORK=${CMAKE_CURRENT_BINARY_DIR}/languages
                  -DPYTHON=${BUFS_PYTHON} -DNODE=${BUFS_NODE} -DESBUILD=${BUFS_ESBUILD} -DDOTNET=${BUFS_DOTNET}
                  -P ${CMAKE_CURRENT_SOURCE_DIR}/languages/run.cmake)
-set_tests_properties(bufs_languages PROPERTIES TIMEOUT 300)
+set_tests_properties(bufs_languages PROPERTIES TIMEOUT 300 RESOURCE_LOCK bufs_cs_build)  # dotnet builds cs/Bufs in place, like bufs_examples

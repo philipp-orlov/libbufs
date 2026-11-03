@@ -25,6 +25,18 @@
 #include "everything.bufs.hpp"
 #include "tricky.bufs.hpp"
 
+// ThreadSanitizer's runtime defines operator new itself: the allocation count is not available there.
+#if defined(__SANITIZE_THREAD__)
+#define BUFS_COUNTS_ALLOCATIONS 0
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define BUFS_COUNTS_ALLOCATIONS 0
+#endif
+#endif
+#ifndef BUFS_COUNTS_ALLOCATIONS
+#define BUFS_COUNTS_ALLOCATIONS 1
+#endif
+
 namespace {
 
 std::atomic<size_t> allocations{0};
@@ -501,7 +513,9 @@ void noHeapAfterWarmUp() {
     std::printf("  10000 build+verify+read: %zu heap allocations, %llu new mappings\n", heap,
                 static_cast<unsigned long long>(pool.stats().mapCalls - maps));
     // fill() itself makes one std::vector per call; the library none.
+#if BUFS_COUNTS_ALLOCATIONS
     CHECK(heap == 10000);
+#endif
     CHECK(pool.stats().mapCalls == maps);
 }
 
@@ -642,6 +656,7 @@ void sizeHelpers() {
 
 } // namespace
 
+#if BUFS_COUNTS_ALLOCATIONS
 void* operator new(std::size_t size) {
     allocations.fetch_add(1, std::memory_order_relaxed);
     if (void* p = std::malloc(size ? size : 1))
@@ -650,6 +665,7 @@ void* operator new(std::size_t size) {
 }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#endif
 
 int main() {
     roundTrip();

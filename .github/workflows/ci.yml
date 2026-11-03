@@ -61,7 +61,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DBUFS_BUILD_FUZZ=ON -DBUFS_LIBCORE_DIR=$GITHUB_WORKSPACE/libcore -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer"
+          cmake -S . -B build -G Ninja -DBUILD_TESTING=ON -DBUFS_BUILD_FUZZ=OFF -DBUFS_LIBCORE_DIR=$GITHUB_WORKSPACE/libcore -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-fsanitize=thread -fno-omit-frame-pointer"
       - name: Build
         run: cmake --build build
       - name: Test

@@ -19,6 +19,6 @@ if(BUFS_BUILD_TESTS)
             list(APPEND args --dotnet ${BUFS_EXAMPLES_DOTNET})
         endif()
         add_test(NAME bufs_examples COMMAND ${BUFS_EXAMPLES_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/run_examples.py ${args})
-        set_tests_properties(bufs_examples PROPERTIES TIMEOUT 300)
+        set_tests_properties(bufs_examples PROPERTIES TIMEOUT 300 RESOURCE_LOCK bufs_cs_build)  # see bufs_languages
     endif()
 endif()
