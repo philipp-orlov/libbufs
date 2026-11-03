@@ -29,13 +29,13 @@ endif()
 # The schema compiler. Its front end (parser, checker, schema model) is libcore's libschema: a sibling checkout by
 # default, ignored when the including project already provides the target.
 set(BUFS_LIBCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libcore" CACHE PATH "Path to a libcore checkout")
-if(NOT TARGET develop::schema)
+if(NOT TARGET core::schema)
     set(DEVELOP_BUILD_TESTS OFF CACHE BOOL "")
     add_subdirectory("${BUFS_LIBCORE_DIR}" libcore)
 endif()
 add_library(bufs INTERFACE)
 # Shared memory, descriptors and futex waits come from libcore's libsys.
-target_link_libraries(bufs INTERFACE $<BUILD_INTERFACE:develop::mem> $<BUILD_INTERFACE:develop::sys>)
+target_link_libraries(bufs INTERFACE $<BUILD_INTERFACE:core::mem> $<BUILD_INTERFACE:core::sys>)
 add_library(bufs::bufs ALIAS bufs)
 target_include_directories(bufs INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(bufs INTERFACE cxx_std_17)
@@ -50,7 +50,7 @@ endif()
 
 # The schema compiler. Its front end (parser, checker, schema model) is libcore's libschema.
 add_executable(bufsc bufsc/main.cpp bufsc/generate_cpp.cpp bufsc/generators.cpp bufsc/gen_ts.cpp bufsc/gen_cs.cpp bufsc/gen_py.cpp)
-target_link_libraries(bufsc PRIVATE develop::schema)
+target_link_libraries(bufsc PRIVATE core::schema)
 target_compile_options(bufsc PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>)
 if(NOT CMAKE_CROSSCOMPILING)
     add_executable(bufs::bufsc ALIAS bufsc)
