@@ -3,5 +3,5 @@
 
 #pragma once
 
-// The schema model lives in develop-core (libschema); this forwarding header keeps the old include path.
+// The schema model lives in libcore (libschema); this forwarding header keeps the old include path.
 #include <schema/schema.hpp>

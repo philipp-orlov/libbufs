@@ -115,7 +115,7 @@ bool spinFor(std::chrono::nanoseconds spin, Ready ready) {
 // `bytes` of anonymous shared memory, zeroed, mapped read-write. Created here
 // (create) or received from another process (adopt). The descriptor stays
 // open, so it can be passed on with bufs::local::Socket. The work is done by
-// sys::SharedMemory (develop-core); this class keeps the exception types
+// sys::SharedMemory (libcore); this class keeps the exception types
 // bufs has always thrown (std::system_error, std::invalid_argument).
 class Memory {
 public:

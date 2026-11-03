@@ -26,15 +26,15 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     enable_testing()
 endif()
 
-# The schema compiler. Its front end (parser, checker, schema model) is develop-core's libschema: a sibling checkout by
+# The schema compiler. Its front end (parser, checker, schema model) is libcore's libschema: a sibling checkout by
 # default, ignored when the including project already provides the target.
-set(BUFS_DEVELOP_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../develop-core" CACHE PATH "Path to a develop-core checkout")
+set(BUFS_LIBCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libcore" CACHE PATH "Path to a libcore checkout")
 if(NOT TARGET develop::schema)
     set(DEVELOP_BUILD_TESTS OFF CACHE BOOL "")
-    add_subdirectory("${BUFS_DEVELOP_CORE_DIR}" develop-core)
+    add_subdirectory("${BUFS_LIBCORE_DIR}" libcore)
 endif()
 add_library(bufs INTERFACE)
-# Shared memory, descriptors and futex waits come from develop-core's libsys.
+# Shared memory, descriptors and futex waits come from libcore's libsys.
 target_link_libraries(bufs INTERFACE $<BUILD_INTERFACE:develop::mem> $<BUILD_INTERFACE:develop::sys>)
 add_library(bufs::bufs ALIAS bufs)
 target_include_directories(bufs INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
@@ -48,7 +48,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
-# The schema compiler. Its front end (parser, checker, schema model) is develop-core's libschema.
+# The schema compiler. Its front end (parser, checker, schema model) is libcore's libschema.
 add_executable(bufsc bufsc/main.cpp bufsc/generate_cpp.cpp bufsc/generators.cpp bufsc/gen_ts.cpp bufsc/gen_cs.cpp bufsc/gen_py.cpp)
 target_link_libraries(bufsc PRIVATE develop::schema)
 target_compile_options(bufsc PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra>)

@@ -76,7 +76,7 @@ private:
     size_t capacity_ = 0;
 };
 
-// The pool itself is develop-core's mem::SizeClassPool (sharded slabs with per-thread caches for the small classes,
+// The pool itself is libcore's mem::SizeClassPool (sharded slabs with per-thread caches for the small classes,
 // per-block mappings with idle-page release for the large ones, misuse detection, an off-heap bookkeeping); this class
 // keeps libbufs's interface and its one extra behaviour, blocks above the largest class mapped per use.
 class BufferPool {

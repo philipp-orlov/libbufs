@@ -3,7 +3,7 @@
 
 #pragma once
 
-// An owned file descriptor, closed when destroyed. Move-only. Lives in develop-core's libsys now.
+// An owned file descriptor, closed when destroyed. Move-only. Lives in libcore's libsys now.
 
 #include "sys/fd.hpp"
 
