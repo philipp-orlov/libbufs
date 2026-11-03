@@ -1,7 +1,8 @@
 // The C++ side of the cross-language test (see run.cmake): writes the reference messages of kitchen.bufs, and checks the
 // ones the other languages wrote.
 //   golden write DIR      DIR/cpp_ref.bin, DIR/cpp_defaults.bin
-//   golden verify DIR     checks DIR/<lang>_ref.bin and DIR/<lang>_defaults.bin for ts, cs and py
+//   golden verify DIR [LANG...]  checks DIR/<lang>_ref.bin and DIR/<lang>_defaults.bin for the languages that ran
+//                                (run.cmake passes them; ts, cs and py when none are given)
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -158,7 +159,7 @@ void spit(const std::string& path, const uint8_t* data, size_t size) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3)
+    if (argc < 3)
         return 2;
     const std::string mode = argv[1], dir = argv[2];
     if (mode == "write") {
@@ -177,8 +178,11 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    std::vector<std::string> langs(argv + 3, argv + argc);
+    if (langs.empty())
+        langs = {"ts", "cs", "py"};
     int failures = 0;
-    for (const char* lang : {"ts", "cs", "py"}) {
+    for (const std::string& lang : langs) {
         for (const char* what : {"ref", "defaults"}) {
             const std::string path = dir + "/" + lang + "_" + what + ".bin";
             const std::vector<char> bytes = slurp(path);
@@ -195,7 +199,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "%s: %s\n", path.c_str(), problems.c_str());
                 ++failures;
             } else {
-                std::printf("ok - %s_%s read by C++\n", lang, what);
+                std::printf("ok - %s_%s read by C++\n", lang.c_str(), what);
             }
         }
     }
