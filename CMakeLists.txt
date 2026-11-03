@@ -30,7 +30,7 @@ endif()
 # default, ignored when the including project already provides the target.
 set(BUFS_LIBCORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libcore" CACHE PATH "Path to a libcore checkout")
 if(NOT TARGET core::schema)
-    set(DEVELOP_BUILD_TESTS OFF CACHE BOOL "")
+    set(CORE_BUILD_TESTS OFF CACHE BOOL "")
     add_subdirectory("${BUFS_LIBCORE_DIR}" libcore)
 endif()
 add_library(bufs INTERFACE)
