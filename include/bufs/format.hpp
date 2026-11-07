@@ -27,7 +27,8 @@
 #include <string_view>
 #include <type_traits>
 
-#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+// Windows runs little-endian on every architecture it supports, and MSVC defines no __BYTE_ORDER__.
+#if !defined(_WIN32) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
 #error "libbufs supports little-endian targets only"
 #endif
 

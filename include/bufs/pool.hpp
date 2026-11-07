@@ -23,8 +23,6 @@
 // contend. After a warm-up in which every small class has seen its peak,
 // acquire() and release() make no system call and touch no allocator.
 
-#include <sys/mman.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
